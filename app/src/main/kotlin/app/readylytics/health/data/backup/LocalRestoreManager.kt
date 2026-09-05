@@ -38,6 +38,7 @@ class LocalRestoreManager
         private val restorePrefsApplier: RestorePreferencesApplier,
         private val encryptionManager: EncryptionManager,
         private val auditTrailRepository: AuditTrailRepository,
+        private val recommendationCoverageChecker: RestoreRecommendationCoverageChecker,
         @param:IoDispatcher private val ioDispatcher: CoroutineDispatcher,
     ) {
         private val json = Json { ignoreUnknownKeys = true }
@@ -124,6 +125,13 @@ class LocalRestoreManager
             }
 
             val prefsBackup = readManifestAndStream(zipFile)
+
+            // Task 5: a restored backup may predate workout-recommendation assembly, or -- since
+            // it can be internally inconsistent (e.g. it predates a rule-version bump the restored
+            // scoringVersion doesn't reflect) -- simply carry payloads this build's codec no longer
+            // recognizes. Either way the restored data is still fully valid and must restore
+            // successfully; this only ever *schedules* a local backfill, it never fails the restore.
+            recommendationCoverageChecker.scheduleRecomputeIfIncomplete()
 
             if (prefsBackup != null) {
                 try {

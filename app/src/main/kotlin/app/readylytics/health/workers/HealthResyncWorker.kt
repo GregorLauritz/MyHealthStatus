@@ -17,10 +17,12 @@ import app.readylytics.health.core.model.domain.migration.DatabaseReadiness
 import app.readylytics.health.core.model.domain.migration.DatabaseReadinessInspector
 import app.readylytics.health.core.model.domain.preferences.SettingsRepository
 import app.readylytics.health.core.model.domain.preferences.UserPreferences
+import app.readylytics.health.core.model.domain.preferences.scoringZone
 import app.readylytics.health.core.model.domain.repository.HealthConnectPermissionRevokedException
 import app.readylytics.health.core.model.domain.scoring.TrainingReadinessConfig
 import app.readylytics.health.core.model.domain.sync.ResyncPhase
 import app.readylytics.health.core.model.domain.sync.ScoreInvalidation
+import app.readylytics.health.core.model.domain.util.RetentionBounds
 import app.readylytics.health.core.model.domain.util.logE
 import dagger.Lazy
 import dagger.assisted.Assisted
@@ -129,7 +131,7 @@ class HealthResyncWorker
 
             return if (result.isSuccess) {
                 onSuccessChanged(true)
-                persistPostRecomputeState()
+                persistPostRecomputeState(recomputeOnly = recomputeOnly, rangeOverride = rangeOverride)
                 Result.success()
             } else {
                 // Transient HC/IO failure: let WorkManager retry with its backoff policy.
@@ -201,12 +203,23 @@ class HealthResyncWorker
          * best-effort and idempotent — a failure here cannot corrupt already-recomputed scores, and the
          * next successful resync re-runs it. The startup initializer intentionally no longer bumps the
          * version, so a killed worker leaves the stale version in place and the next launch re-enqueues.
+         *
+         * The version bump is additionally gated on [coversRetainedHistory]: [CURRENT_SCORING_VERSION]
+         * asserts that a *full* retained-history recompute happened (every retained day now carries a
+         * recommendation), so a bounded pass -- a settings-driven range, [DataCleanupWorker]'s
+         * retention-shrink fan-out, or a correction's example fan-out -- must never be allowed to mark
+         * it complete merely because it happened to run while the stored version was stale.
          */
-        private suspend fun persistPostRecomputeState() {
+        private suspend fun persistPostRecomputeState(
+            recomputeOnly: Boolean,
+            rangeOverride: ScoreInvalidation.AffectedRange?,
+        ) {
             try {
                 val settings = settingsRepository.get()
                 val prefs = settings.userPreferences.first()
-                if (prefs.scoringVersion < SettingsDefaults.CURRENT_SCORING_VERSION) {
+                if (coversRetainedHistory(recomputeOnly, rangeOverride, prefs) &&
+                    prefs.scoringVersion < SettingsDefaults.CURRENT_SCORING_VERSION
+                ) {
                     settings.updateScoringVersion(SettingsDefaults.CURRENT_SCORING_VERSION)
                 }
                 settings.updateSleepScoreRecalcBaseline(
@@ -224,6 +237,30 @@ class HealthResyncWorker
             } catch (e: Exception) {
                 logE(TAG, e) { "Failed to persist post-recompute scoring version/baseline" }
             }
+        }
+
+        /**
+         * True when this successful run's recompute range provably spans the entire retained
+         * history, i.e. it is safe to mark [SettingsDefaults.CURRENT_SCORING_VERSION] complete:
+         * - A full Health Connect resync ([recomputeOnly] false) always recomputes
+         *   [RetentionBounds.resolveHistoricalWindow]'s full `[startDate, endDate]` regardless of
+         *   any [rangeOverride] (see [FullHistoricalResyncUseCase.execute]) -- always true.
+         * - A recompute-only pass with no [rangeOverride] also covers the full retention window
+         *   (the override only ever *narrows* a recompute-only pass) -- also true.
+         * - A recompute-only pass with a [rangeOverride] is bounded to whatever range its caller
+         *   computed (a settings change, [DataCleanupWorker]'s retention fan-out, or a correction's
+         *   example fan-out via [ScoreInvalidation.exampleFanOutRange]) -- true only if that range
+         *   still happens to span the full retention window through today.
+         */
+        private fun coversRetainedHistory(
+            recomputeOnly: Boolean,
+            rangeOverride: ScoreInvalidation.AffectedRange?,
+            prefs: UserPreferences,
+        ): Boolean {
+            if (!recomputeOnly || rangeOverride == null) return true
+            val today = LocalDate.now(prefs.scoringZone())
+            val retentionStart = RetentionBounds.resolveResyncStartDate(prefs, today)
+            return !rangeOverride.start.isAfter(retentionStart) && !rangeOverride.endInclusive.isBefore(today)
         }
 
         override suspend fun getForegroundInfo(): ForegroundInfo {

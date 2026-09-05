@@ -28,7 +28,10 @@ object SettingsDefaults {
     const val MIN_HYPERSOMNIA_ONSET_PERCENT = 100
     const val MAX_HYPERSOMNIA_ONSET_PERCENT = 125
     const val HYPERSOMNIA_ONSET_PERCENT_STEP = 5
-    const val CURRENT_SCORING_VERSION = 4
+    // v5: full retained-history recompute now also assembles a workout recommendation
+    // (MorningRecommendationAssembler) for every day, backfilling `workoutRecommendationJson` on
+    // pre-existing daily_summaries rows. See HealthResyncWorker.persistPostRecomputeState.
+    const val CURRENT_SCORING_VERSION = 5
     const val CORE_MERGE_GAP_MINUTES = 180
     const val MIN_CORE_MERGE_GAP_MINUTES = 30
     const val MAX_CORE_MERGE_GAP_MINUTES = 240

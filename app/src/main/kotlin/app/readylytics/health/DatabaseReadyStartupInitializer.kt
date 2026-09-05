@@ -91,6 +91,14 @@ internal class DatabaseReadyStartupInitializer(
      * Two gates share one enqueue: a stale scoring version, and retained workouts whose canonical
      * `modelTrimp` was never backfilled (HIGH-2). Both are healed by the same recompute-only
      * resync, so they are evaluated together and enqueued at most once per launch.
+     *
+     * Task 5: version 5 marks that a full retained-history recompute has run, which -- since
+     * Task 4 wired `MorningRecommendationAssembler` into every `computeDailySummary` call -- now
+     * also backfills `workoutRecommendationJson` for every retained day. A user stored at any
+     * version below 5 (including 4) needs exactly this same enqueue; only
+     * [HealthResyncWorker.persistPostRecomputeState] is allowed to advance the stored version, and
+     * only once its recompute range provably covered full retained history (see
+     * [HealthResyncWorker.coversRetainedHistory]) -- never here, and never for a bounded pass.
      */
     private suspend fun scheduleRecomputeResyncIfNeeded(prefs: UserPreferences) {
         val storedScoringVersion = prefs.scoringVersion
