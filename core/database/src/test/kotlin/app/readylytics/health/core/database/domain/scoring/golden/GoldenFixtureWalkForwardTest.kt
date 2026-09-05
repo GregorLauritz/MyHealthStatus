@@ -10,6 +10,7 @@ import app.readylytics.health.core.database.data.local.SessionLinkReconcilerImpl
 import app.readylytics.health.core.databaseschema.data.local.entity.DailySummaryEntity
 import app.readylytics.health.core.model.data.preferences.UserPreferences
 import app.readylytics.health.core.database.data.repository.BodyMetricsDataLoader
+import app.readylytics.health.core.database.data.repository.MorningRecommendationDependencies
 import app.readylytics.health.core.database.data.repository.ReadinessSummaryCoordinator
 import app.readylytics.health.core.database.data.repository.ScoringDayDataLoader
 import app.readylytics.health.core.database.data.repository.ScoringSeriesLoader
@@ -255,6 +256,15 @@ class GoldenFixtureWalkForwardTest {
                     scoringHistoryRepository = scoringHistoryRepository,
                     readinessSummaryCoordinator = readinessSummaryCoordinator,
                     defaultDispatcher = UnconfinedTestDispatcher(),
+                    recommendationDependencies =
+                        MorningRecommendationDependencies(
+                            sleepSessionRepository = io.mockk.mockk(relaxed = true),
+                            computeSleepMetricsUseCase = io.mockk.mockk(relaxed = true),
+                            hrvResolver = io.mockk.mockk(relaxed = true),
+                            workoutRepository = io.mockk.mockk(relaxed = true),
+                            dailySummaryRepository = io.mockk.mockk(relaxed = true),
+                            getWorkoutDisplayMetricsUseCase = io.mockk.mockk(relaxed = true),
+                        ),
                 )
             // WP-11/HC-006 fix: this fixture's stage-less-night scenario (`stageLessNightDate`)
             // seeds a SleepSessionEntity with durationMinutes = 0 directly (mirroring a session

@@ -68,14 +68,32 @@ class WorkoutRecommendationCodecTest {
                     ),
                 examples =
                     listOf(
-                        example("w1", WorkoutLoadLevel.HARD),
-                        example("w2", WorkoutLoadLevel.MODERATE),
-                        example("w3", WorkoutLoadLevel.HARD),
+                        example("w1", WorkoutLoadLevel.HARD, exerciseType = "Running"),
+                        example("w2", WorkoutLoadLevel.MODERATE, exerciseType = "Cycling"),
+                        example("w3", WorkoutLoadLevel.HARD, exerciseType = "Rowing"),
                     ),
             )
         val decoded = WorkoutRecommendationCodec.decode(WorkoutRecommendationCodec.encode(value))
         assertEquals(value, decoded)
         assertEquals(listOf("w1", "w2", "w3"), decoded?.examples?.map { it.workoutId })
+    }
+
+    @Test
+    fun decodeReturnsNullWhenExamplesShareAnExerciseType() {
+        // Invalid invariant: the producer (SelectWorkoutRecommendationExamples) keeps at most one
+        // example per exercise type. Two "Running" examples is not a shape it can ever produce.
+        val value =
+            WorkoutRecommendationSnapshot(
+                wakeSessionId = "sleep-1",
+                wakeTimeMs = 1000,
+                decision = WorkoutRecommendationDecision(WorkoutRecommendationState.HARDER),
+                examples =
+                    listOf(
+                        example("w1", WorkoutLoadLevel.HARD, exerciseType = "Running"),
+                        example("w2", WorkoutLoadLevel.HARD, exerciseType = "Running"),
+                    ),
+            )
+        assertNull(WorkoutRecommendationCodec.decode(WorkoutRecommendationCodec.encode(value)))
     }
 
     @Test
@@ -161,10 +179,10 @@ class WorkoutRecommendationCodecTest {
         assertEquals(WorkoutRecommendationCodec.encode(value), WorkoutRecommendationCodec.encode(value))
     }
 
-    private fun example(id: String, load: WorkoutLoadLevel) =
+    private fun example(id: String, load: WorkoutLoadLevel, exerciseType: String = "Running") =
         WorkoutRecommendationExample(
             workoutId = id,
-            exerciseType = "Running",
+            exerciseType = exerciseType,
             startTimeMs = 0L,
             endTimeMs = 1L,
             durationMinutes = 30,

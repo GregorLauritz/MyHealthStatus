@@ -65,8 +65,12 @@ class SelectWorkoutRecommendationExamples {
             -> emptySet()
         }
 
-    private companion object {
-        const val MIN_ELIGIBLE_DURATION_MINUTES = 15
+    companion object {
+        private const val MIN_ELIGIBLE_DURATION_MINUTES = 15
+
+        // Not private: `WorkoutRecommendationCodec` (core/database) validates a decoded snapshot's
+        // example count against this same constant on read-back, rather than a hand-duplicated copy
+        // that could silently drift out of sync with a future change here.
         const val MAX_EXAMPLES = 3
     }
 }

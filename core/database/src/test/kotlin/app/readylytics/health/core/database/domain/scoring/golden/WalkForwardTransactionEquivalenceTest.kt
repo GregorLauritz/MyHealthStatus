@@ -8,6 +8,7 @@ import app.readylytics.health.core.database.data.local.HealthDatabase
 import app.readylytics.health.core.database.data.local.RoomTransactionRunner
 import app.readylytics.health.core.model.data.preferences.UserPreferences
 import app.readylytics.health.core.database.data.repository.BodyMetricsDataLoader
+import app.readylytics.health.core.database.data.repository.MorningRecommendationDependencies
 import app.readylytics.health.core.database.data.repository.ReadinessSummaryCoordinator
 import app.readylytics.health.core.database.data.repository.ScoringDayDataLoader
 import app.readylytics.health.core.database.data.repository.ScoringSeriesLoader
@@ -209,6 +210,15 @@ class WalkForwardTransactionEquivalenceTest {
                     scoringHistoryRepository = scoringHistoryRepository,
                     readinessSummaryCoordinator = readinessSummaryCoordinator,
                     defaultDispatcher = UnconfinedTestDispatcher(),
+                    recommendationDependencies =
+                        MorningRecommendationDependencies(
+                            sleepSessionRepository = io.mockk.mockk(relaxed = true),
+                            computeSleepMetricsUseCase = io.mockk.mockk(relaxed = true),
+                            hrvResolver = io.mockk.mockk(relaxed = true),
+                            workoutRepository = io.mockk.mockk(relaxed = true),
+                            dailySummaryRepository = io.mockk.mockk(relaxed = true),
+                            getWorkoutDisplayMetricsUseCase = io.mockk.mockk(relaxed = true),
+                        ),
                 )
             val recomputeSupport =
                 DailyRecomputeSupport(scoringRepository, settingsRepo, RoomTransactionRunner(db))

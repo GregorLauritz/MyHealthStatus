@@ -27,6 +27,7 @@ import app.readylytics.health.core.model.data.preferences.PhysiologyProfile
 import app.readylytics.health.core.model.domain.preferences.SettingsRepository
 import app.readylytics.health.core.model.data.preferences.UserPreferences
 import app.readylytics.health.core.database.data.repository.BodyMetricsDataLoader
+import app.readylytics.health.core.database.data.repository.MorningRecommendationDependencies
 import app.readylytics.health.core.database.data.repository.ReadinessSummaryCoordinator
 import app.readylytics.health.core.database.data.repository.ScoringDayDataLoader
 import app.readylytics.health.core.database.data.repository.ScoringRepositoryImpl
@@ -76,6 +77,10 @@ class ScoringPointInTimeRegressionTest {
 
     @Before
     fun setup() {
+        repo = buildRepo()
+    }
+
+    private fun buildRepo(): ScoringRepositoryImpl {
         val dataLoader =
             ScoringDayDataLoader(
                 workoutDao,
@@ -110,30 +115,43 @@ class ScoringPointInTimeRegressionTest {
                 ResolveDailyBaselinesUseCase(baselineComputer),
                 AssembleDailySummaryUseCase(),
             )
-        repo =
-            ScoringRepositoryImpl(
-                ScoringDataLoaders(
-                    dataLoader,
-                    bodyMetricsDataLoader,
-                    seriesLoader,
-                ),
-                settingsRepo,
-                baselineComputer,
-                scoringConfigFactory,
-                ScoringDayUseCases(
-                    ComputeDailyTrimpUseCase(computeWorkoutTrimpUseCase),
-                    ComputeResidualFatigueUseCase(),
-                    ResolveDailyBaselinesUseCase(baselineComputer),
-                    AssembleEverydayLoadInputUseCase(),
-                        ComputeTrainingReadinessUseCase(scoringCalculator),
-                    UthVo2MaxCalculator(),
-                    Vo2MaxSourceResolver(),
-                ),
-                scoringHistoryRepository,
-                readinessSummaryCoordinator,
-                UnconfinedTestDispatcher(),
-            )
+        return ScoringRepositoryImpl(
+            ScoringDataLoaders(
+                dataLoader,
+                bodyMetricsDataLoader,
+                seriesLoader,
+            ),
+            settingsRepo,
+            baselineComputer,
+            scoringConfigFactory,
+            ScoringDayUseCases(
+                ComputeDailyTrimpUseCase(computeWorkoutTrimpUseCase),
+                ComputeResidualFatigueUseCase(),
+                ResolveDailyBaselinesUseCase(baselineComputer),
+                AssembleEverydayLoadInputUseCase(),
+                    ComputeTrainingReadinessUseCase(scoringCalculator),
+                UthVo2MaxCalculator(),
+                Vo2MaxSourceResolver(),
+            ),
+            scoringHistoryRepository,
+            readinessSummaryCoordinator,
+            UnconfinedTestDispatcher(),
+            fakeRecommendationDependencies(),
+        )
     }
+
+    // The recommendation feature is orthogonal to this file's point-in-time regression coverage:
+    // relaxed mocks resolve to a NO_SLEEP snapshot (no session ends "today" in these fixtures)
+    // without needing real repositories wired up.
+    private fun fakeRecommendationDependencies() =
+        MorningRecommendationDependencies(
+            sleepSessionRepository = mockk(relaxed = true),
+            computeSleepMetricsUseCase = mockk(relaxed = true),
+            hrvResolver = mockk(relaxed = true),
+            workoutRepository = mockk(relaxed = true),
+            dailySummaryRepository = mockk(relaxed = true),
+            getWorkoutDisplayMetricsUseCase = mockk(relaxed = true),
+        )
 
     private fun setupFrozenSnapshot(dayMidnightMs: Long, today: LocalDate, zoneId: ZoneId) {
         val frozenSnapshot =

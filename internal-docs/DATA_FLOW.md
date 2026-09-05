@@ -1463,30 +1463,40 @@ feeds `MorningRecommendationAssembler`'s source-session retention rule (§2.11.1
 one-argument `assemble(context)` would silently disable that retention and re-run selection from
 scratch on every call.
 
-`ScoringRepositoryImpl` builds its own `MorningRecommendationAssembler` from a `MorningRecommendationDependencies`
-holder (`SleepSessionRepository`, `ComputeSleepMetricsUseCase`, `CurrentNightHrvResolver`,
-`WorkoutRepository`, `DailySummaryRepository`, `GetWorkoutDisplayMetricsUseCase` — grouped for the same
-`LongParameterList` reason as `ScoringDataLoaders`/`ScoringDayUseCases`), reusing this repository's own
-`residualFatigueComputer`/`calibrationGate`/`baselineComputer`/`scoringConfigFactory` rather than
-separate instances — both collaborators are stateless aside from the caller-passed walk-forward
-context, so this is equivalent to Hilt providing fresh ones. The dependency holder is nullable
-(default `null`) purely so the repository's many pre-existing positional test call sites keep
-compiling; production Hilt injection always supplies a real one, and a `null` there simply skips
-recommendation assembly for that call (`workoutRecommendation` stays whatever the copy chain already
-carried, ordinarily `null`).
+`ScoringRepositoryImpl` builds its own `MorningRecommendationAssembler` from a required (non-nullable)
+`MorningRecommendationDependencies` constructor parameter -- its own file,
+`core/database/.../data/repository/MorningRecommendationDependencies.kt`, mirroring the
+`ScoringDataLoaders.kt`/`ScoringDayUseCases.kt` precedent -- holding `SleepSessionRepository`,
+`ComputeSleepMetricsUseCase`, `CurrentNightHrvResolver`, `WorkoutRepository`, `DailySummaryRepository`,
+`GetWorkoutDisplayMetricsUseCase` (grouped for the same `LongParameterList` reason as those two). It
+reuses this repository's own `residualFatigueComputer`/`calibrationGate`/`baselineComputer`/
+`scoringConfigFactory` rather than separate instances -- both collaborators are stateless aside from
+the caller-supplied walk-forward context, so this is equivalent to Hilt providing fresh ones. The
+dependency is required, not optional: an earlier draft defaulted it to `null` for test-call-site
+convenience, but that let a `ScoringRepositoryImpl` built without DI silently produce permanently-null
+recommendations with no log line and no exception, which is a worse failure mode than the mechanical
+cost of updating every construction site (production Hilt injection was never affected either way, so
+no runtime behavior changed).
 
 `WorkoutRecommendationCodec` (`core/database/.../data/mapper/WorkoutRecommendationCodec.kt`) is the
 only place that turns a `WorkoutRecommendationSnapshot` into the column's TEXT value and back, using a
 dedicated `Json { ignoreUnknownKeys = true; encodeDefaults = true }` instance (no shared production
 `Json` existed elsewhere in this module to reuse; `encodeDefaults` keeps `ruleVersion` explicit in the
 stored payload, `ignoreUnknownKeys` lets a future app version's added fields round-trip through an
-older build). `decode` treats any unrecognized `ruleVersion`, any wake-session/wake-time nullness
-mismatch, more than three examples, or examples attached to a non-`EASY`/`HARDER` state as **absent**
-(`null`) rather than coercing it into a decision — a corrupt or future-version row must read back as
-"not calculated yet," never as a guessed `HARDER`. `DailySummaryMapper` calls the codec both ways
-(`toDomain`/`toEntity`), so the recommendation travels through the same single upsert as every other
-computed field — one `dailySummaryDao.upsert(entity)` call commits category, reasons, and examples
-together; there is no separate examples table. Because assembly runs and can throw *before* that
+older build). Its validation constants are imported, not duplicated: `RULE_VERSION` and
+`EXAMPLE_STATES` are `internal` on `MorningRecommendationAssembler.kt` specifically so the codec reads
+the same values the assembler stamps, and the example-count limit is
+`SelectWorkoutRecommendationExamples.MAX_EXAMPLES` (`core/scoring`, exposed non-`private` for the same
+reason) -- a hand-duplicated copy would let a future rule-version or example-count change in one file
+silently desync from the other, so every snapshot written by the new build decodes as absent with no
+error anywhere. `decode` treats any unrecognized `ruleVersion`, any wake-session/wake-time nullness
+mismatch, more than three examples, examples sharing an `exerciseType` (the producer keeps at most one
+example per type), or examples attached to a non-`EASY`/`HARDER` state as **absent** (`null`) rather
+than coercing it into a decision — a corrupt or future-version row must read back as "not calculated
+yet," never as a guessed `HARDER`. `DailySummaryMapper` calls the codec both ways (`toDomain`/
+`toEntity`), so the recommendation travels through the same single upsert as every other computed
+field — one `dailySummaryDao.upsert(entity)` call commits category, reasons, and examples together;
+there is no separate examples table. Because assembly runs and can throw *before* that
 `persist`/`computeAndPersistDailySummary` call, a failed assembly aborts the whole day's write and
 leaves the prior persisted row untouched rather than partially overwriting it.
 
@@ -1495,6 +1505,18 @@ means "not calculated yet" — including every row from before this column exist
 distinct from an assembled snapshot whose own `decision.state` is an unavailable value such as
 `CALIBRATING`. That presentation distinction is drawn by the dashboard UI, not by this persistence
 layer.
+
+**Resync cost (accepted, not yet optimized).** `DailyRecomputeSupport.recomputeDay` →
+`computeAndPersistDailySummary` runs recommendation assembly on *every* day of a full historical
+resync, exactly as it does for the daily-sync path -- there is no walk-forward fast path for it. Per
+day this adds: a `getSince` sleep-history query, a full sleep-metrics pass with
+`forceLiveBaselines = true` (bypassing the frozen-baseline short-circuit ordinary scoring uses once a
+day is frozen), a `CalibrationGate` evaluation, a residual-fatigue evaluation, and — for any day whose
+decision lands on EASY/HARDER — a 30-day workout-example load. None of this is shared across days the
+way `WalkForwardTrimpContext`/`WalkForwardBaselineContext`/`WalkForwardFatigueContext`/
+`WalkForwardVo2MaxContext` amortize the rest of the pipeline (PERF-002/WP-20/WP-22/WP-27). This is an
+accepted cost for this task, not an oversight: batching or otherwise amortizing recommendation
+assembly across a walk-forward resync is deferred to the backfill/upgrade task that follows this one.
 
 ---
 

@@ -153,8 +153,22 @@ abstract class ResidualFatigueWalkForwardTestBase {
             scoringHistoryRepository,
             readinessSummaryCoordinator,
             UnconfinedTestDispatcher(),
+            fakeRecommendationDependencies(),
         )
     }
+
+    // The recommendation feature is orthogonal to residual-fatigue walk-forward equivalence: relaxed
+    // mocks resolve to a NO_SLEEP snapshot (no session ends "today" in these fixtures) without needing
+    // real repositories wired up.
+    private fun fakeRecommendationDependencies() =
+        MorningRecommendationDependencies(
+            sleepSessionRepository = mockk(relaxed = true),
+            computeSleepMetricsUseCase = mockk(relaxed = true),
+            hrvResolver = mockk(relaxed = true),
+            workoutRepository = mockk(relaxed = true),
+            dailySummaryRepository = mockk(relaxed = true),
+            getWorkoutDisplayMetricsUseCase = mockk(relaxed = true),
+        )
 
     private fun stubScoringDependencies() {
         every { settingsRepo.userPreferences } returns

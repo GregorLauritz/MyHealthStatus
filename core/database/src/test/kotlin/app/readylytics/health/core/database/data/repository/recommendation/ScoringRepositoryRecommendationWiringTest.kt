@@ -22,6 +22,7 @@ import app.readylytics.health.core.databaseschema.data.local.dao.WeightRecordDao
 import app.readylytics.health.core.databaseschema.data.local.dao.WorkoutDao
 import app.readylytics.health.core.model.data.preferences.UserPreferences
 import app.readylytics.health.core.model.domain.model.DailySummary
+import app.readylytics.health.core.model.domain.model.Result
 import app.readylytics.health.core.model.domain.preferences.SettingsRepository
 import app.readylytics.health.core.model.domain.recommendation.WorkoutRecommendationDecision
 import app.readylytics.health.core.model.domain.recommendation.WorkoutRecommendationExample
@@ -30,6 +31,7 @@ import app.readylytics.health.core.model.domain.recommendation.WorkoutRecommenda
 import app.readylytics.health.core.model.domain.recommendation.WorkoutRecommendationState
 import app.readylytics.health.core.model.domain.repository.DailySummaryRepository
 import app.readylytics.health.core.model.domain.repository.ScoringHistoryRepository
+import app.readylytics.health.core.model.domain.repository.SleepSessionData
 import app.readylytics.health.core.model.domain.repository.SleepSessionRepository
 import app.readylytics.health.core.model.domain.repository.WorkoutRepository
 import app.readylytics.health.core.model.domain.scoring.WorkoutLoadLevel
@@ -129,7 +131,7 @@ class ScoringRepositoryRecommendationWiringTest {
     private val seriesLoader = ScoringSeriesLoader(workoutDao, dailySummaryDao)
 
     private fun createRepo(
-        recommendationDependencies: MorningRecommendationDependencies? = null,
+        recommendationDependencies: MorningRecommendationDependencies = createRecommendationDependencies(),
     ): ScoringRepositoryImpl {
         val readinessSummaryCoordinator =
             ReadinessSummaryCoordinator(
@@ -194,13 +196,60 @@ class ScoringRepositoryRecommendationWiringTest {
     }
 
     @Test
-    fun `computeDailySummary leaves workoutRecommendation null when recommendation dependencies are absent`() =
+    fun `computeDailySummary retains the previous available-state session over the habitual-wake selector`() =
         runTest {
+            // Regression guard for the `previous` argument specifically: if `assemble(context,
+            // previous = ...)` ever regresses to the one-arg `assemble(context)`, this session
+            // retention is silently disabled and this test fails -- unlike a scenario with zero
+            // candidates, where both the retention lookup and a dropped `previous` land on the same
+            // NO_SLEEP result and a regression would go unnoticed.
+            val today = LocalDate.now()
+            val zoneId = ZoneId.systemDefault()
+            val todayMs = today.atStartOfDay(zoneId).toInstant().toEpochMilli()
+            val habitualWakeHour = 7
+
+            // Five strictly-earlier nights, all ending at 07:00, establish a habitual wake baseline
+            // the selector would otherwise measure today's candidates against.
+            val priorNights =
+                (1..5).map { daysAgo ->
+                    sleepData(
+                        id = "prior-$daysAgo",
+                        endMs = endOfDayMs(today.minusDays(daysAgo.toLong()), habitualWakeHour, zoneId),
+                    )
+                }
+            // The habitual-wake selector's own pick: ends exactly at the 07:00 baseline, zero clock
+            // distance -- it would win `selectByHabitualWake` outright if retention didn't short-circuit it.
+            val habitualMatchSession =
+                sleepData(id = "habitual-match", endMs = endOfDayMs(today, habitualWakeHour, zoneId))
+            // The session the stale previous snapshot names: far from the habitual wake (03:00), so
+            // it only wins if `previous` is actually honored.
+            val retainedSession = sleepData(id = "retained-session", endMs = endOfDayMs(today, 3, zoneId))
+            coEvery { recommendationSleepSessionRepository.getSince(any()) } returns
+                (priorNights + listOf(habitualMatchSession, retainedSession))
+
+            val staleSnapshot =
+                WorkoutRecommendationSnapshot(
+                    wakeSessionId = "retained-session",
+                    wakeTimeMs = retainedSession.endTime,
+                    decision =
+                        WorkoutRecommendationDecision(
+                            WorkoutRecommendationState.HARDER,
+                            listOf(WorkoutRecommendationReason.WITHIN_USUAL_RANGE),
+                        ),
+                )
+            coEvery { scoringHistoryRepository.getDailySummaryByDate(todayMs, zoneId) } returns
+                DailySummary(date = today, workoutRecommendation = staleSnapshot)
+            // A real session is resolved this time, so the recovery loader's sleep-metrics pass
+            // actually runs (unlike the NO_SLEEP tests below, where it's never reached).
+            coEvery { recommendationComputeSleepMetricsUseCase(any()) } returns
+                Result.success(DailySummary(date = today))
+
             val repo = createRepo()
 
-            val result = repo.computeDailySummary(LocalDate.now())
+            val result = repo.computeDailySummary(today)
 
-            assertNull(result.workoutRecommendation)
+            // If `previous` were dropped, this would resolve to "habitual-match" instead.
+            assertEquals("retained-session", result.workoutRecommendation?.wakeSessionId)
         }
 
     @Test
@@ -278,4 +327,27 @@ class ScoringRepositoryRecommendationWiringTest {
 
             coVerify(exactly = 0) { dailySummaryDao.upsert(any()) }
         }
+
+    private fun endOfDayMs(
+        date: LocalDate,
+        hour: Int,
+        zoneId: ZoneId,
+    ): Long = date.atTime(hour, 0).atZone(zoneId).toInstant().toEpochMilli()
+
+    private fun sleepData(
+        id: String,
+        endMs: Long,
+        durationMinutes: Int = 480,
+    ) = SleepSessionData(
+        id = id,
+        deviceName = "watch",
+        startTime = endMs - durationMinutes * 60_000L,
+        endTime = endMs,
+        durationMinutes = durationMinutes,
+        efficiency = 0.9f,
+        deepSleepMinutes = 90,
+        lightSleepMinutes = 280,
+        remSleepMinutes = 90,
+        awakeMinutes = 20,
+    )
 }

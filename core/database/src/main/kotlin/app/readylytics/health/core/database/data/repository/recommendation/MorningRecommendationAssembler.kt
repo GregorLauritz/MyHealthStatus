@@ -15,8 +15,14 @@ import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/** Rule version stamped onto every snapshot this assembler produces. */
-private const val RULE_VERSION = 1
+/**
+ * Rule version stamped onto every snapshot this assembler produces.
+ *
+ * `internal` (not `private`) so [app.readylytics.health.core.database.data.mapper.WorkoutRecommendationCodec]
+ * can validate a decoded payload against the *same* constant on read-back, rather than a
+ * hand-duplicated copy that could silently drift out of sync with a future rule-version bump here.
+ */
+internal const val RULE_VERSION = 1
 
 /** How far back examples are drawn from, relative to the wake time. */
 private const val EXAMPLE_WINDOW_DAYS = 30L
@@ -29,8 +35,13 @@ private val AVAILABLE_STATES =
         WorkoutRecommendationState.HARDER,
     )
 
-/** States that can be illustrated with past workouts; every other state ships no examples. */
-private val EXAMPLE_STATES =
+/**
+ * States that can be illustrated with past workouts; every other state ships no examples.
+ *
+ * `internal` for the same reason as [RULE_VERSION]: [app.readylytics.health.core.database.data.mapper.WorkoutRecommendationCodec]
+ * validates a decoded snapshot's examples against this same set rather than a duplicated copy.
+ */
+internal val EXAMPLE_STATES =
     setOf(WorkoutRecommendationState.EASY, WorkoutRecommendationState.HARDER)
 
 /**
