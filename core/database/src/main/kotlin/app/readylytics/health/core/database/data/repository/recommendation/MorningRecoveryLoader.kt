@@ -1,5 +1,6 @@
 package app.readylytics.health.core.database.data.repository.recommendation
 
+import app.readylytics.health.core.database.data.repository.CalibrationGate
 import app.readylytics.health.core.database.data.repository.ResidualFatigueComputer
 import app.readylytics.health.core.database.data.repository.ScoringDayContext
 import app.readylytics.health.core.model.domain.model.DailySummary
@@ -10,6 +11,7 @@ import app.readylytics.health.core.model.domain.repository.SleepSessionData
 import app.readylytics.health.core.model.domain.repository.SleepSessionRepository
 import app.readylytics.health.core.model.domain.scoring.ScoringConstants
 import app.readylytics.health.core.scoring.domain.recommendation.WorkoutRecommendationInput
+import app.readylytics.health.core.scoring.domain.scoring.BaselineComputer
 import app.readylytics.health.core.scoring.domain.scoring.CircadianWakeBaseline
 import app.readylytics.health.core.scoring.domain.scoring.ComputeSleepMetricsUseCase
 import app.readylytics.health.core.scoring.domain.scoring.ScoringConfigFactory
@@ -64,6 +66,8 @@ class MorningRecoveryLoader
         private val hrvResolver: CurrentNightHrvResolver,
         private val residualFatigueComputer: ResidualFatigueComputer,
         private val scoringConfigFactory: ScoringConfigFactory,
+        private val baselineComputer: BaselineComputer,
+        private val calibrationGate: CalibrationGate,
     ) {
         /**
          * [sessions] is the caller's already-loaded sleep history covering at least
@@ -85,14 +89,25 @@ class MorningRecoveryLoader
             val hasCircadianBaseline =
                 CircadianWakeBaseline.resolve(priorHistory, prefs.consistencyBaselineDays, context.zoneId) != null
 
-            val morningSummary = computeMorningSleepMetrics(context, session, history)
+            val boundedSessions = history.filter { it.endTime <= wakeTimeMs }.map { it.toDomainSession() }
+            val morningSummary = computeMorningSleepMetrics(context, session, boundedSessions)
             val hrv = hrvResolver.resolve(session, setOf(session.id))
             val thresholds = emergencyThresholds(context)
+            // `ComputeSleepMetricsUseCase` never stamps `isCalibrating` on the summary it returns
+            // (it passes the caller's value through), so it has to be resolved here — through the
+            // same gate the daily pipeline uses, bounded at the wake time.
+            val isCalibrating =
+                !calibrationGate.isCalibrated(
+                    context = context,
+                    prefetchedSessions = boundedSessions,
+                    hasSession = true,
+                    toMs = wakeTimeMs,
+                )
 
             return WorkoutRecommendationInput(
                 hasSleep = true,
                 nightlyHrv = hrv.mean,
-                isCalibrating = morningSummary.isCalibrating,
+                isCalibrating = isCalibrating,
                 hasCircadianBaseline = hasCircadianBaseline,
                 zLnHrv = morningSummary.zLnHrv,
                 lowHrvBound = thresholds.illnessZHrvThreshold,
@@ -107,7 +122,7 @@ class MorningRecoveryLoader
         private suspend fun computeMorningSleepMetrics(
             context: ScoringDayContext,
             session: SleepSession,
-            history: List<SleepSessionData>,
+            boundedSessions: List<SleepSession>,
         ): DailySummary {
             val wakeTimeMs = session.endTime
             val baseSummary = context.dailySummary ?: DailySummary(date = context.targetDate)
@@ -121,11 +136,14 @@ class MorningRecoveryLoader
                     loadScore = baseSummary.loadScoreWorkoutOnly ?: 0f,
                     loadScoreEverydayHr = baseSummary.loadScoreEverydayHr,
                     zoneId = context.zoneId,
-                    rhrBaselineValue = context.initialBaselines.rhrBaselineValue,
+                    rhrBaselineValue = morningRhrBaseline(context, wakeTimeMs, boundedSessions),
                     dayEndMs = wakeTimeMs,
                     currentSessionIds = setOf(session.id),
-                    prefetchedSessions =
-                        history.filter { it.endTime <= wakeTimeMs }.map { it.toDomainSession() },
+                    prefetchedSessions = boundedSessions,
+                    forceLiveBaselines = true,
+                    // Both the frozen snapshot and `context.initialBaselines` were resolved with a
+                    // next-day-midnight window; honouring them would make a day score differently
+                    // once it froze. See `SleepMetricsRequest.forceLiveBaselines`.
                 )
             // A failed pass is an operational failure, not "no recovery data": surfacing it lets the
             // caller retry instead of persisting a fabricated unavailable state.
@@ -133,6 +151,34 @@ class MorningRecoveryLoader
                 error("Morning sleep metrics failed for ${context.targetDate}: ${failure.code} ${failure.reason}")
             }
         }
+
+        /**
+         * The day's RHR baseline re-derived with the wake time as its upper bound.
+         *
+         * `ScoringDayContext.initialBaselines.rhrBaselineValue` cannot be reused: for an unfrozen
+         * day it comes from `computeAdaptiveBaselineRhrBpmBetween(dayMidnight, nextDayMidnight)`,
+         * a window that explicitly includes the day's own later sessions — so an afternoon nap
+         * would move `baselineRhrValue`, `zRhr`, and with it `ILLNESS_ONSET`. Precedence mirrors
+         * `ResolveDailyBaselinesUseCase`: an explicit user override wins, then the computed
+         * baseline, then the shipped default.
+         */
+        private suspend fun morningRhrBaseline(
+            context: ScoringDayContext,
+            wakeTimeMs: Long,
+            boundedSessions: List<SleepSession>,
+        ): Float =
+            context.prefs.rhrBaselineOverride
+                ?: baselineComputer
+                    .computeAdaptiveBaselineRhrBpmBetween(
+                        fromMs = context.dayMidnightMs,
+                        toMs = wakeTimeMs,
+                        percentile = context.prefs.restingHrPercentile,
+                        zoneId = context.zoneId,
+                        sleepDayPolicy = context.sleepDayPolicy,
+                        prefetchedSessions = boundedSessions,
+                        ignoreFrozenSnapshot = true,
+                    )?.takeIf { it > 0f }
+                ?: ScoringConstants.DEFAULT_RHR_BPM
 
         /**
          * HRV deviation bounds for the day, taken from the profile the day was *scored* with. A user

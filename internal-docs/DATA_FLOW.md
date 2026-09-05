@@ -1352,7 +1352,11 @@ the end of one selected sleep record:
 4. With a previously stored snapshot in hand, the assembler keeps its `wakeSessionId` across ordinary
    daytime appends but re-reads the row, so corrected timestamps/stages are picked up. A source that
    no longer exists triggers a fresh selection. With no circadian baseline at all, the snapshot still
-   names a source (earliest end, then id) so the unavailable state can be explained.
+   names a source (earliest end, then id) so the unavailable state can be explained — but that
+   degenerate pick is **not** retained: only a `wakeSessionId` that backed an *available*
+   (Rest/Easy/Harder) decision survives the retention rule. Otherwise a day whose baseline later
+   becomes resolvable through backfill would stay anchored to a fallback session (e.g. the 03:00
+   segment of a split night) instead of re-running proper wake-time selection.
 5. No sleep record ending on the date → `wakeSessionId`/`wakeTimeMs` are null and the evaluator is
    asked with `hasSleep = false`, yielding `NO_SLEEP`.
 
@@ -1368,10 +1372,36 @@ narrowed `SleepMetricsRequest`:
 - `currentSessionIds = { selected session }`, so nightly HRV (`CurrentNightHrvResolver`, floating
   mean — never a rounded UI value) and nocturnal RHR come from that record alone;
 - `prefetchedSessions` pre-truncated at the wake time, so the regularity modifier's circadian score
-  (`SleepModifierResolver` → `CircadianConsistencyRepository.scoreFor`) cannot see a later nap.
+  (`SleepModifierResolver` → `CircadianConsistencyRepository.scoreFor`) cannot see a later nap;
+- `rhrBaselineValue` **re-derived** at the wake time. `ScoringDayContext.initialBaselines.rhrBaselineValue`
+  cannot be forwarded: for an unfrozen day it comes from `computeAdaptiveBaselineRhrBpmBetween(dayMidnight,
+  nextDayMidnight)`, a window that deliberately includes the day's own later sessions, and it becomes
+  `baselineRhrValue` → `zRhr` → `isRhrOptimal` → `RecoveryFlag.ILLNESS_ONSET` → Rest. The loader calls the
+  same method with `toMs = wakeTime`, following `ResolveDailyBaselinesUseCase`'s precedence (user override →
+  computed → `DEFAULT_RHR_BPM`);
+- `forceLiveBaselines = true`, which keeps the pass on live, `dayEndMs`-bounded windows even after the day's
+  baseline has been frozen (below).
 
-No new request fields were needed; the three above already existed for ordinary daily scoring, which
-continues to pass next-day midnight, the aggregated core cluster, and the walk-forward prefetch.
+**Why the freeze is bypassed here.** Ordinary scoring reads a day's frozen baseline snapshot
+(`hrvMuMssd`/`hrvSigmaMssd`/`rhrBpm`/`rhrSigma`) once `AssembleDailySummaryUseCase` stamps
+`baselineCalculatedAtDate`, and `BaselineComputer`'s `*Between` methods refuse to recompute a frozen day at
+all. But that snapshot was itself computed with `dayEndMs = next-day midnight`. A morning-anchored caller
+that honoured it would silently switch bounding regimes the instant a day froze, so the *first* assembly of
+a day and every *later* replay of the same day could disagree — defeating the reproducibility this section
+exists to guarantee. `SleepMetricsRequest.forceLiveBaselines` (default `false`) and
+`BaselineComputer.computeHrvWindowsBetween`/`computeAdaptiveBaselineRhrBpmBetween`'s `ignoreFrozenSnapshot`
+(default `false`) are the opt-outs that keep the recommendation on one regime. They are only sound for
+callers that do **not** persist what they compute; the recommendation path does not, so `daily_summaries`
+and the resync's exact-reconstruction guarantees are untouched.
+
+**Calibration.** `ComputeSleepMetricsUseCase` does not stamp `isCalibrating` on the summary it returns (it
+passes the caller's value straight through), so the loader resolves it through the same `CalibrationGate`
+the daily pipeline uses, with `toMs = wakeTime`. A frozen day short-circuits to calibrated in both paths —
+the freeze stamp is only ever written for a day that already passed this gate.
+
+Beyond `rhrBaselineValue` and `forceLiveBaselines`, no new request fields were needed; `dayEndMs`,
+`currentSessionIds` and `prefetchedSessions` already existed for ordinary daily scoring, which continues to
+pass next-day midnight, the aggregated core cluster, and the walk-forward prefetch.
 
 The remaining inputs: HRV deviation bounds are `EmergencyFlagThresholds.illnessZHrvThreshold` /
 `.strongRecoveryZHrvThreshold` from the **frozen** profile (`DailySummary.snapshotProfile`, rebuilt
@@ -1638,7 +1668,8 @@ defaults when unset).
 | `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/recommendation/SelectMorningSleepSession.kt` | Processing — wake anchor (pure) | circular clock distance to the habitual wake time; ties by earliest end then stable id (§2.11.1) |
 | `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/scoring/CircadianWakeBaseline.kt` | Processing — habitual bed/wake times (pure) | shared ≥180-min / ≥3-session baseline selection + median, used by the circadian score and the morning anchor (§2.11.1) |
 | `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/recommendation/MorningRecommendationAssembler.kt` | Processing — morning snapshot | anchor selection → bounded recovery inputs → evaluator → example selection (§2.11.1) |
-| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/recommendation/MorningRecoveryLoader.kt` | Processing — bounded recovery inputs | re-runs `ComputeSleepMetricsUseCase` bounded at the wake time; frozen-profile HRV bounds; `computeAt` fatigue (§2.11.2) |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/recommendation/MorningRecoveryLoader.kt` | Processing — bounded recovery inputs | re-runs `ComputeSleepMetricsUseCase` bounded at the wake time (`forceLiveBaselines`, wake-bounded RHR baseline, `CalibrationGate` at wake); frozen-profile HRV bounds; `computeAt` fatigue (§2.11.2) |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/CalibrationGate.kt` | Processing — calibration gate | frozen ⇒ calibrated, else live valid-night count; optional `toMs` for the morning anchor (§2.4, §2.11.2) |
 | `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/recommendation/WorkoutExampleLoader.kt` | Processing — example candidates | 30-day pre-wake window, pre-narrowed rows, one summary prefetch, memoized display metrics (§2.11.3) |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/repository/WalkForwardFatigueContext.kt` | Processing — walk-forward accumulator | prefetched impulse series + running accumulated fatigue (WP-27) |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/repository/WalkForwardVo2MaxContext.kt` | Processing — walk-forward VO2 Max lookup | prefetched wearable VO2 Max readings (`TreeMap<Long, Float>`), `floorEntry`-based per-day lookup (§2.6) |

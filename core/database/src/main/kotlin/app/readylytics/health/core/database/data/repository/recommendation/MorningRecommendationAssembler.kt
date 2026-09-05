@@ -21,6 +21,14 @@ private const val RULE_VERSION = 1
 /** How far back examples are drawn from, relative to the wake time. */
 private const val EXAMPLE_WINDOW_DAYS = 30L
 
+/** States in which the evaluator actually formed a guidance opinion. */
+private val AVAILABLE_STATES =
+    setOf(
+        WorkoutRecommendationState.REST,
+        WorkoutRecommendationState.EASY,
+        WorkoutRecommendationState.HARDER,
+    )
+
 /** States that can be illustrated with past workouts; every other state ships no examples. */
 private val EXAMPLE_STATES =
     setOf(WorkoutRecommendationState.EASY, WorkoutRecommendationState.HARDER)
@@ -54,8 +62,8 @@ class MorningRecommendationAssembler
         /**
          * [previous] is the snapshot already stored for this day, when there is one. Its source
          * session is kept across ordinary daytime appends — re-read from Room, so a corrected
-         * timestamp or stage breakdown is picked up — and only a source that no longer exists
-         * triggers a fresh selection.
+         * timestamp or stage breakdown is picked up. A source that no longer exists, or that backed
+         * an unavailable decision, triggers a fresh selection instead.
          */
         suspend fun assemble(
             context: ScoringDayContext,
@@ -112,8 +120,16 @@ class MorningRecommendationAssembler
                     .filter {
                         Instant.ofEpochMilli(it.endTime).atZone(context.zoneId).toLocalDate() == context.targetDate
                     }.map { it.toDomainSession() }
+            // Only a source that backed an *available* decision is worth keeping. A snapshot in an
+            // unavailable state may have named a degenerate fallback (picked with no circadian
+            // baseline to measure against); pinning that would survive into a later assembly whose
+            // baseline has since become resolvable, anchoring an available decision to the wrong
+            // record. Re-running selection is always correct there, and cheap.
             val retained =
-                previous?.wakeSessionId?.let { storedId -> candidates.firstOrNull { it.id == storedId } }
+                previous
+                    ?.takeIf { it.decision.state in AVAILABLE_STATES }
+                    ?.wakeSessionId
+                    ?.let { storedId -> candidates.firstOrNull { it.id == storedId } }
             return retained ?: selectByHabitualWake(context, history, candidates)
         }
 

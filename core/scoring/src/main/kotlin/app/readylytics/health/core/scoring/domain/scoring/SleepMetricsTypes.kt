@@ -49,6 +49,14 @@ data class SleepMetricsCollaborators
  * [prefetchedSessions] is pre-truncated at the same wake time, so the regularity modifier's
  * circadian score cannot see a nap recorded later the same day. A sleep record appended after the
  * anchor therefore cannot move the resulting `zLnHrv`, sleep score, or illness flag.
+ *
+ * [forceLiveBaselines] completes that bounding. Ordinary scoring reads a day's *frozen* baseline
+ * snapshot once `baselineCalculatedAtDate` is stamped, and that snapshot was itself computed with
+ * `dayEndMs = next-day midnight`. A morning-anchored caller that honoured the freeze would silently
+ * switch bounding regimes the moment a day froze, so the same day would score differently before
+ * and after. Setting this flag keeps the pass on the live, [dayEndMs]-bounded windows in both
+ * cases. It is only safe for callers that do **not** persist the resulting summary — the
+ * recommendation path does not.
  */
 data class SleepMetricsRequest(
     val session: SleepSession,
@@ -63,6 +71,7 @@ data class SleepMetricsRequest(
     val dayEndMs: Long,
     val currentSessionIds: Set<String>,
     val prefetchedSessions: List<SleepSession>?,
+    val forceLiveBaselines: Boolean = false,
 )
 
 internal data class NocturnalScoringInput(

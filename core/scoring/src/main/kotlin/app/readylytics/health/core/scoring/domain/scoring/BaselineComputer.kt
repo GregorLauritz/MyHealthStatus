@@ -120,6 +120,27 @@ class BaselineComputer
         }
 
         /**
+         * Freeze enforcement (US-B6): a day whose baseline is already frozen must not have it
+         * recomputed, because the stored snapshot is what the user was scored against.
+         *
+         * The `ignoreFrozenSnapshot` opt-out on the two `*Between` methods exists for callers that
+         * are *not* re-deriving the day's stored baseline — currently only the morning
+         * workout-recommendation path, which needs the same windows evaluated at a different upper
+         * bound (wake time instead of next-day midnight) and never persists what it computes.
+         */
+        private suspend fun isBaselineFrozen(
+            fromMs: Long,
+            zoneId: ZoneId,
+        ): Boolean {
+            val frozenSummary = scoringHistoryRepository.getDailySummaryByDate(fromMs, zoneId)
+            val frozen = frozenSummary?.baselineCalculatedAtDate
+            if (frozen != null) {
+                logD(TAG) { "Baseline frozen for date=$frozen; skipping baseline recompute" }
+            }
+            return frozen != null
+        }
+
+        /**
          * Resolves the baseline RHR scalar used for TRIMP/RAS calculations.
          * Delegates to [Companion.resolveBaselineRhrBpm].
          */
@@ -151,17 +172,10 @@ class BaselineComputer
             zoneId: ZoneId,
             sleepDayPolicy: SleepDayPolicy? = null,
             prefetchedSessions: List<SleepSession>? = null,
+            ignoreFrozenSnapshot: Boolean = false,
         ): Float? {
             val inclusiveToMs = (toMs - 1).coerceAtLeast(0)
-            val frozenSummary =
-                scoringHistoryRepository.getDailySummaryByDate(
-                    fromMs,
-                    zoneId,
-                )
-            if (frozenSummary?.baselineCalculatedAtDate != null) {
-                logD(TAG) { "Baseline frozen; skipping RHR recompute" }
-                return null
-            }
+            if (!ignoreFrozenSnapshot && isBaselineFrozen(fromMs, zoneId)) return null
             val baselineFromMs =
                 Instant
                     .ofEpochMilli(
@@ -333,21 +347,10 @@ class BaselineComputer
             excludeSessionIds: Set<String> = emptySet(),
             sleepDayPolicy: SleepDayPolicy? = null,
             prefetchedSessions: List<SleepSession>? = null,
+            ignoreFrozenSnapshot: Boolean = false,
         ): HrvWindows? {
             val inclusiveToMs = (toMs - 1).coerceAtLeast(0)
-            val frozenSummary =
-                scoringHistoryRepository.getDailySummaryByDate(
-                    fromMs,
-                    zoneId,
-                )
-            if (frozenSummary?.baselineCalculatedAtDate != null) {
-                logD(
-                    TAG,
-                ) {
-                    "Baseline frozen for date=${frozenSummary.baselineCalculatedAtDate}; skipping HRV window recompute"
-                }
-                return null
-            }
+            if (!ignoreFrozenSnapshot && isBaselineFrozen(fromMs, zoneId)) return null
             val sigmaWindowFromMs =
                 Instant
                     .ofEpochMilli(

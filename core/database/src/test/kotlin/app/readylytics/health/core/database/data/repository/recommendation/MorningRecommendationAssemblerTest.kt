@@ -1,5 +1,6 @@
 package app.readylytics.health.core.database.data.repository.recommendation
 
+import app.readylytics.health.core.database.data.repository.CalibrationGate
 import app.readylytics.health.core.database.data.repository.ResidualFatigueComputer
 import app.readylytics.health.core.database.data.repository.ScoringDayContext
 import app.readylytics.health.core.database.data.repository.ScoringDayDataLoader
@@ -20,6 +21,7 @@ import app.readylytics.health.core.model.domain.repository.WorkoutData
 import app.readylytics.health.core.model.domain.repository.WorkoutRepository
 import app.readylytics.health.core.model.domain.scoring.WorkoutIntensityLevel
 import app.readylytics.health.core.model.domain.scoring.WorkoutLoadLevel
+import app.readylytics.health.core.scoring.domain.scoring.BaselineComputer
 import app.readylytics.health.core.scoring.domain.scoring.ComputeResidualFatigueUseCase
 import app.readylytics.health.core.scoring.domain.scoring.ComputeSleepMetricsUseCase
 import app.readylytics.health.core.scoring.domain.scoring.GetWorkoutDisplayMetricsUseCase
@@ -75,6 +77,7 @@ class MorningRecommendationAssemblerTest {
     private val workoutRepository = mockk<WorkoutRepository>()
     private val dailySummaryRepository = mockk<DailySummaryRepository>()
     private val displayMetrics = mockk<GetWorkoutDisplayMetricsUseCase>()
+    private val baselineComputer = mockk<BaselineComputer>()
 
     private val morningSession =
         sleepData("main", endMs = wakeMs, durationMinutes = 480)
@@ -173,24 +176,71 @@ class MorningRecommendationAssemblerTest {
     private fun stubSleepMetrics(
         zLnHrv: Float? = 0.1f,
         sleepScore: Float? = 80f,
-        isCalibrating: Boolean = false,
         flags: Set<RecoveryFlag> = emptySet(),
         request: CapturingSlot<SleepMetricsRequest>? = null,
     ) {
+        stubBaselines()
         val slot = request ?: slot()
         coEvery { computeSleepMetrics(capture(slot)) } answers {
             val req = slot.captured
-            val leaked = req.prefetchedSessions.orEmpty().any { it.endTime > req.dayEndMs }
+            // Models the three ways the real pass can widen past the wake anchor: a leaked
+            // session in the prefetch, a day-scoped RHR baseline, or honouring a frozen
+            // (next-day-midnight) baseline snapshot instead of the live wake-bounded window.
+            val leakedSession = req.prefetchedSessions.orEmpty().any { it.endTime > req.dayEndMs }
+            val leakedRhrBaseline = req.rhrBaselineValue > BOUNDED_RHR_BASELINE
+            val honoursFreeze =
+                !req.forceLiveBaselines && req.summary.baselineCalculatedAtDate != null
+            val widened = leakedSession || leakedRhrBaseline || honoursFreeze
             Result.success(
                 DailySummary(
                     date = req.targetDate,
-                    zLnHrv = if (leaked) LEAKED_Z else zLnHrv,
-                    sleepScore = if (leaked) LEAKED_SLEEP_SCORE else sleepScore,
-                    isCalibrating = isCalibrating,
+                    zLnHrv = if (widened) LEAKED_Z else zLnHrv,
+                    sleepScore = if (widened) LEAKED_SLEEP_SCORE else sleepScore,
                     recoveryFlags = flags,
                 ),
             )
         }
+    }
+
+    /**
+     * The wake-bounded RHR baseline the loader is expected to derive, plus enough valid historical
+     * nights for the calibration gate to pass. Both answers are computed from the arguments the
+     * loader passes, so widening either window changes the value the sleep-metrics stub sees.
+     */
+    private fun stubBaselines(validHistoricalDayCount: Int = 6) {
+        coEvery {
+            baselineComputer.computeAdaptiveBaselineRhrBpmBetween(
+                fromMs = any(),
+                toMs = any(),
+                percentile = any(),
+                zoneId = any(),
+                sleepDayPolicy = any(),
+                prefetchedSessions = any(),
+                ignoreFrozenSnapshot = any(),
+            )
+        } answers {
+            val upperBoundMs = arg<Long>(1)
+            val offered = arg<List<SleepSession>?>(5).orEmpty()
+            BOUNDED_RHR_BASELINE + offered.count { it.endTime > upperBoundMs }
+        }
+        coEvery {
+            baselineComputer.computeHrvWindowsBetween(
+                fromMs = any(),
+                toMs = any(),
+                zoneId = any(),
+                excludeSessionIds = any(),
+                sleepDayPolicy = any(),
+                prefetchedSessions = any(),
+                ignoreFrozenSnapshot = any(),
+            )
+        } returns
+            BaselineComputer.HrvWindows(
+                muHistory = emptyList(),
+                sigmaHistory = emptyList(),
+                historicalSessions = emptyList(),
+                validHistoricalSessionIds = emptyList(),
+                validHistoricalDayCount = validHistoricalDayCount,
+            )
     }
 
     private fun stubHrv(mean: Float = 55f) {
@@ -249,6 +299,8 @@ class MorningRecommendationAssemblerTest {
                     hrvResolver = hrvResolver,
                     residualFatigueComputer = fatigueComputer,
                     scoringConfigFactory = ScoringConfigFactory(),
+                    baselineComputer = baselineComputer,
+                    calibrationGate = CalibrationGate(baselineComputer),
                 ),
             exampleLoader =
                 WorkoutExampleLoader(
@@ -419,9 +471,11 @@ class MorningRecommendationAssemblerTest {
         }
 
     @Test
-    fun `a calibrating baseline reports calibrating`() =
+    fun `too few valid historical nights report calibrating`() =
         runTest {
-            stubSleepMetrics(isCalibrating = true)
+            stubSleepMetrics()
+            // 2 prior valid nights + tonight = 3, below the 7-night calibration gate.
+            stubBaselines(validHistoricalDayCount = 2)
             stubHrv()
             stubWorkouts(emptyList())
             stubFatigue(listOf(seedWorkout))
@@ -547,6 +601,101 @@ class MorningRecommendationAssemblerTest {
         }
 
     @Test
+    fun `the rhr baseline is re-derived at the wake time, not taken from the day-scoped context`() =
+        runTest {
+            val captured = slot<SleepMetricsRequest>()
+            stubSleepMetrics(request = captured)
+            stubHrv()
+            stubWorkouts(emptyList())
+            stubFatigue(listOf(seedWorkout))
+            stubSessions(priorNights + morningSession + afternoonNap)
+
+            assembler().assemble(context())
+
+            // 55f is ScoringDayContext.initialBaselines.rhrBaselineValue, computed over the whole
+            // day; forwarding it would let the 14:00 nap move zRhr and with it ILLNESS_ONSET.
+            assertEquals(BOUNDED_RHR_BASELINE, captured.captured.rhrBaselineValue)
+            assertTrue(captured.captured.forceLiveBaselines)
+        }
+
+    @Test
+    fun `a same-day-later sleep record cannot move the rhr baseline or the recovery flags`() =
+        runTest {
+            stubSleepMetrics()
+            stubHrv()
+            stubWorkouts(emptyList())
+            stubFatigue(listOf(seedWorkout))
+
+            stubSessions(priorNights + morningSession)
+            val morningOnly = assembler().assemble(context())
+
+            // A long afternoon sleep with its own HR data: if the RHR baseline window still ran to
+            // next-day midnight it would absorb this record.
+            stubSessions(priorNights + morningSession + afternoonNap)
+            val withLaterRecord = assembler().assemble(context())
+
+            assertEquals(morningOnly, withLaterRecord)
+            assertEquals(WorkoutRecommendationState.HARDER, morningOnly.decision.state)
+            assertTrue(morningOnly.decision.reasons.none { it == WorkoutRecommendationReason.POSSIBLE_ILLNESS })
+        }
+
+    @Test
+    fun `freezing the day's baseline snapshot does not change the snapshot`() =
+        runTest {
+            stubSleepMetrics()
+            stubHrv()
+            stubWorkouts(listOf(runningWorkout, cyclingWorkout))
+            stubFatigue(listOf(seedWorkout))
+            stubSessions(priorNights + morningSession)
+
+            // First assembly of the day: nothing frozen yet, baselines resolved live.
+            val beforeFreeze = assembler().assemble(context())
+
+            // Every later assembly: the daily pipeline has since stamped baselineCalculatedAtDate,
+            // whose snapshot was bounded at next-day midnight rather than at wake.
+            val frozen =
+                DailySummary(
+                    date = date,
+                    baselineCalculatedAtDate = date,
+                    hrvMuMssd = 3.9f,
+                    hrvSigmaMssd = 0.3f,
+                    rhrBpm = 61f,
+                    rhrSigma = 2f,
+                    snapshotProfile = prefs.physiologyProfile.name,
+                )
+            val afterFreeze = assembler().assemble(context(frozen))
+
+            assertEquals(beforeFreeze, afterFreeze)
+            assertEquals(WorkoutRecommendationState.HARDER, beforeFreeze.decision.state)
+        }
+
+    @Test
+    fun `a fallback source picked without a baseline is not pinned once a baseline appears`() =
+        runTest {
+            stubSleepMetrics()
+            stubHrv()
+            stubWorkouts(emptyList())
+            stubFatigue(listOf(seedWorkout))
+            val earlyEndMs = date.atTime(3, 0).atZone(zone).toInstant().toEpochMilli()
+            val earlySegment = sleepData("early", endMs = earlyEndMs, durationMinutes = 200)
+
+            // Day 1: no prior history, so no circadian baseline. Selection degenerates to the
+            // earliest end time, which is the 03:00 segment rather than the real morning wake.
+            stubSessions(listOf(earlySegment, morningSession))
+            val degraded = assembler().assemble(context())
+            assertEquals(WorkoutRecommendationState.NO_CIRCADIAN_BASELINE, degraded.decision.state)
+            assertEquals("early", degraded.wakeSessionId)
+
+            // Backfill later supplies the prior nights, so a baseline now resolves for the same day.
+            stubSessions(priorNights + earlySegment + morningSession)
+            val recovered = assembler().assemble(context(), degraded)
+
+            assertEquals(WorkoutRecommendationState.HARDER, recovered.decision.state)
+            assertEquals("main", recovered.wakeSessionId)
+            assertEquals(wakeMs, recovered.wakeTimeMs)
+        }
+
+    @Test
     fun `an operational read failure propagates instead of reporting no data`() =
         runTest {
             coEvery { sleepSessionRepository.getSince(any()) } throws IllegalStateException("db closed")
@@ -561,6 +710,7 @@ class MorningRecommendationAssemblerTest {
             stubWorkouts(emptyList())
             stubFatigue(listOf(seedWorkout))
             stubSessions(priorNights + morningSession)
+            stubBaselines()
             coEvery { computeSleepMetrics(any()) } throws CancellationException("cancelled")
 
             assertFailsWith<CancellationException> { assembler().assemble(context()) }
@@ -573,6 +723,7 @@ class MorningRecommendationAssemblerTest {
             stubWorkouts(emptyList())
             stubFatigue(listOf(seedWorkout))
             stubSessions(priorNights + morningSession)
+            stubBaselines()
             coEvery { computeSleepMetrics(any()) } returns Result.failure("boom", "SLEEP_METRICS_ERROR")
 
             assertFailsWith<IllegalStateException> { assembler().assemble(context()) }
@@ -581,5 +732,6 @@ class MorningRecommendationAssemblerTest {
     private companion object {
         const val LEAKED_Z = -9f
         const val LEAKED_SLEEP_SCORE = 10f
+        const val BOUNDED_RHR_BASELINE = 50f
     }
 }
