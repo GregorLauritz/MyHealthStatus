@@ -1219,7 +1219,7 @@ The calculation is always on; users can optionally visualize Residual Fatigue ac
    - `GetCurrentResidualFatigueUseCase` returns a tri-state `LiveResidualFatigue`, which `DashboardMetricPresentationFactory` maps as follows. `NotApplicable` (selected day already ended) -> the persisted end-of-day snapshot `DailySummary.residualFatigue`. `Value` (current day) -> live fatigue from `ScoringRepository.computeCurrentResidualFatigue` -> `ResidualFatigueComputer.computeLive(nowMs, prefs)`, which evaluates exponential decay through the current instant rather than tonight's midnight, on the same basis as the Workouts tab decay chart's "now" dot and without mutating `daily_summaries` or the walk-forward accumulator. `Unavailable` (current day, but `computeLive` gated or the lookup threw) -> **NO_DATA**.
    - The tri-state is load-bearing, not stylistic: `Unavailable` must never fall back to the snapshot. The two never-backfilled gates differ — `computeLive` uses `loadUnbackfilledCountThrough(retentionStart, nowMs)` (`endTime <= nowMs`), the snapshot uses `loadUnbackfilledCountBefore(retentionStart, dayStart)` (`startTime < dayStart`). A workout *ending today* with a null `modelTrimp` therefore trips the live gate but not the snapshot's, and `getCanonicalFatigueInputsThrough` filters `modelTrimp IS NOT NULL`, so it contributes zero to the snapshot. Falling back would display a silently understated value in exactly the case the HIGH-2 "unknown, not low" gate exists to catch.
    - Refresh cadence: `DashboardFatigueTicker` emits a minute bucket into `DashboardViewModel`'s `combine` (paired with the RAS-increase flow, since the typed `combine` overloads stop at five sources). The bucket is also part of `FatigueCacheKey`, so the value re-decays once a minute while the dashboard is subscribed, and the memo still absorbs the high-frequency data flows in between. `SharingStarted.WhileSubscribed` stops the ticker shortly after the UI goes away and restarts it with a fresh bucket on resubscribe. The lookup is wrapped so a DB failure degrades to `Unavailable` instead of escaping the transform and killing `stateIn`'s sharing coroutine.
-   - Formatted into a `UniversalMetricPresentation`: value formatted to 1 decimal place, unit empty/dimensionless, and secondary text `card_residual_fatigue_secondary` ("Half-life: Xh"). The gauge scale and the status cut-points are **multiplied by the configured `residualFatigueGain`**, because the metric is `gain * sum(TRIMP) * decay` and gain is user-settable over 0.1–5.0: gauge min=0 / max=`100 * gain`, status classification (`< 30 * gain` Optimal, `<= 70 * gain` Neutral, above that Warning, unavailable input NO_DATA). Fixed cut-points would read Optimal with a pinned-to-zero gauge at gain 0.1 and Warning with a saturated gauge at gain 5.0.
+   - Formatted into a `UniversalMetricPresentation`: value formatted to 1 decimal place, unit empty/dimensionless, and secondary text `card_residual_fatigue_secondary` ("Half-life: Xh"). The gauge scale is **multiplied by the configured `residualFatigueGain`** (gauge min=0 / max=`100 * gain`), because the metric is `gain * sum(TRIMP) * decay` and gain is user-settable over 0.1–5.0. Fixed cut-points would read Optimal with a pinned-to-zero gauge at gain 0.1 and Warning with a saturated gauge at gain 5.0. The status classification itself (`< 30 * gain` Optimal, `<= 70 * gain` Neutral, above that Warning, null/non-finite/negative value or non-finite/non-positive gain → NO_DATA) is **not** computed inline here — it lives in the shared pure classifier `ResidualFatigueThresholds.classify(value, gain)` (`core/model/.../domain/scoring/`), and this card calls it rather than duplicating the comparison. `ComputeWorkoutRecommendationUseCase` (§2.11) calls the same classifier for its fatigue-based reason, so the two surfaces cannot drift apart on where "high fatigue" begins.
    - Renders via `UniversalMetricCard` across Gauge, Bar, and Value display modes. Tapping the card navigates to the Workouts tab (`onNavigateToWorkouts`).
 2. **Workouts Residual Fatigue Curve Chart (`WorkoutChartId.RESIDUAL_FATIGUE_CURVE`):**
    - Registered in `WorkoutChartId` and default-hidden in `SettingsDefaults.DEFAULT_WORKOUT_CHARTS` (`isVisible = false`).
@@ -1275,6 +1275,54 @@ Training Stress Balance (TSB) represents readiness based on training load, calcu
   - **-30 to -10:** Fatigued / Overload
   - **< -30:** High Risk / Overreached
 - **UI Presentation:** TSB is shown in the Workouts tab (toggleable) and optionally as a Dashboard card.
+
+### 2.11 Workout Recommendation (HRV-guided)
+
+A daily HRV-guided workout recommendation (Rest / Easy / Harder, plus several "unavailable"
+states) is decided by the pure `ComputeWorkoutRecommendationUseCase` (`core/scoring/.../domain/recommendation/`).
+This is Task 1 of the feature — the evaluator itself; upstream input resolution, historical
+example selection, snapshot persistence, and Dashboard presentation are separate, later tasks and
+are documented here only where their contract is already fixed by the evaluator's shape.
+
+**Contract.** `compute(input: WorkoutRecommendationInput): WorkoutRecommendationDecision` performs
+no reads, clock access, Health Connect/Room lookups, or string localization — every field of
+`WorkoutRecommendationInput` (`core/scoring/.../domain/recommendation/`) is a value the caller has
+already resolved for the day in question (nightly HRV, HRV z-score plus its baseline low/high
+bounds, sleep score, residual fatigue plus its configured gain, circadian-baseline availability,
+the day's calibration flag, and the day's `RecoveryFlag` set). A `null` or non-finite number is
+always "unknown", never coerced to a value that happens to read as in-range (e.g. a missing HRV
+z-score is never treated as zero deviation). `WorkoutRecommendationState` and
+`WorkoutRecommendationReason`/`WorkoutRecommendationDecision` live in `core:model`
+(`domain/recommendation/WorkoutRecommendation.kt`) so later persistence/UI tasks can depend on the
+model without pulling in `core:scoring`.
+
+**Availability gate (checked in this fixed order; the first failing check wins).**
+1. No sleep session for the day → `NO_SLEEP`.
+2. Nightly HRV missing, non-positive, or non-finite → `NO_HRV`.
+3. Day still calibrating (`isCalibrating`) → `CALIBRATING`. The seven-day calibration gate itself is
+   computed upstream and handed in as this one boolean; the evaluator has no clock or day-counter of
+   its own and does not re-derive it.
+4. No circadian baseline for the day → `NO_CIRCADIAN_BASELINE`.
+5. HRV z-score or either bound missing/non-finite, or the bounds not strictly ordered
+   (`lowHrvBound < highHrvBound`) → `NO_HRV_BASELINE`.
+
+**Reason collection (only once available), in this fixed order — all are preserved, never short-circuited:**
+1. `RecoveryFlag.ILLNESS_ONSET` present → `POSSIBLE_ILLNESS`. Other `RecoveryFlag` values (strong
+   recovery signal, rest-day success, etc.) do not affect the recommendation.
+2. HRV z-score strictly below `lowHrvBound` → `HRV_LOW`; strictly above `highHrvBound` → `HRV_HIGH`;
+   at either bound is within the usual range (no reason).
+3. Sleep score classified via the existing shared `Float?.scoreStatus()` (`core/model/.../domain/model/MetricStatusExtensions.kt`):
+   `POOR`/`WARNING` → `SLEEP_LOW`; `CALIBRATING` (null/non-finite input) → `SLEEP_SCORE_MISSING`;
+   `NEUTRAL`/`OPTIMAL` → no reason.
+4. Residual fatigue classified via the shared `ResidualFatigueThresholds.classify(residualFatigue, fatigueGain)`
+   (§2.8): `WARNING` → `FATIGUE_HIGH`; `NO_DATA` (null/non-finite/negative value or invalid gain) →
+   `FATIGUE_MISSING`; `OPTIMAL`/`NEUTRAL` → no reason.
+
+**State derivation.** `POSSIBLE_ILLNESS` in the collected reasons → `REST` (still carrying every
+other collected reason, not just illness). Otherwise any non-empty reason list → `EASY`. An empty
+reason list → `HARDER`, and the decision's `reasons` becomes the single-element
+`[WITHIN_USUAL_RANGE]` rather than staying empty, so a Rest/Easy/Harder decision always carries at
+least one reason for display.
 
 ---
 
@@ -1494,6 +1542,10 @@ defaults when unset).
 | `core/database/src/main/kotlin/app/readylytics/health/core/database/domain/scoring/TrainingReadinessProjectionRecomputeUseCase.kt` | Processing — parameter-only projection | one retained-summary read + one transactional batch write; no Health Connect/raw/TRIMP/fatigue work (§2.8) |
 | `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/scoring/GenerateResidualFatigueCurveUseCase.kt` | Processing — residual fatigue curve (pure) | generates multi-day timeline samples at zoned 15m steps + workout impulses, truncated at `nowMs` (§2.8) |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/scoring/ResidualFatigueConfig.kt` | Domain — fatigue parameters | always-on halfLifeHours / fatigueGain (§2.8) |
+| `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/scoring/ResidualFatigueThresholds.kt` | Domain — shared fatigue classification (pure) | gain-scaled 30/70 `classify(value, gain)`; null/non-finite/negative value or invalid gain → NO_DATA; shared by the Dashboard card and `ComputeWorkoutRecommendationUseCase` (§2.8, §2.11) |
+| `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/recommendation/WorkoutRecommendation.kt` | Domain — recommendation model | `WorkoutRecommendationState`/`WorkoutRecommendationReason`/`WorkoutRecommendationDecision` (§2.11) |
+| `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/recommendation/WorkoutRecommendationInput.kt` | Processing — recommendation input | fully-resolved parameter object, no reads/clock (§2.11) |
+| `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/recommendation/ComputeWorkoutRecommendationUseCase.kt` | Processing — workout recommendation (pure) | availability gate + ordered reason collection → Rest/Easy/Harder decision (§2.11) |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/repository/WalkForwardFatigueContext.kt` | Processing — walk-forward accumulator | prefetched impulse series + running accumulated fatigue (WP-27) |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/repository/WalkForwardVo2MaxContext.kt` | Processing — walk-forward VO2 Max lookup | prefetched wearable VO2 Max readings (`TreeMap<Long, Float>`), `floorEntry`-based per-day lookup (§2.6) |
 | `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/ResidualFatigueComputer.kt` | Processing — fatigue snapshot | per-day snapshot at next-day midnight (`compute`); live non-persisting decay through `nowMs` (`computeLive`); exact retained-history seed (§2.8) |

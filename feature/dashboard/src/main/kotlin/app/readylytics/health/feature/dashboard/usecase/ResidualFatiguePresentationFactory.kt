@@ -5,6 +5,7 @@ import app.readylytics.health.core.model.domain.model.DailySummary
 import app.readylytics.health.core.model.domain.model.MetricStatus
 import app.readylytics.health.core.model.domain.preferences.UserPreferences
 import app.readylytics.health.core.model.domain.scoring.ResidualFatigueConfig
+import app.readylytics.health.core.model.domain.scoring.ResidualFatigueThresholds
 import app.readylytics.health.core.model.domain.util.ResourceProvider
 import app.readylytics.health.core.ui.components.metriccard.UniversalMetricPresentation
 import app.readylytics.health.core.ui.components.metriccard.UniversalMetricUnavailableReason
@@ -14,10 +15,10 @@ import kotlin.math.roundToInt
 import app.readylytics.health.core.ui.R as CoreUiR
 import app.readylytics.health.feature.dashboard.R as DashboardR
 
-// Residual-fatigue cut-points, expressed at gain 1.0. They are multiplied by the user's configured
-// fatigue gain before use so the classification tracks the scale the metric is actually produced on.
-private const val RESIDUAL_FATIGUE_OPTIMAL_BELOW = 30f
-private const val RESIDUAL_FATIGUE_NEUTRAL_THROUGH = 70f
+// Gauge maximum, expressed at gain 1.0. It is multiplied by the user's configured fatigue gain
+// before use so the gauge scale tracks the scale the metric is actually produced on. The matching
+// 30/70 status cut-points live in the shared ResidualFatigueThresholds.classify, which both this
+// card and the workout-recommendation evaluator call.
 private const val RESIDUAL_FATIGUE_GAUGE_MAX = 100f
 
 /**
@@ -53,13 +54,7 @@ class ResidualFatiguePresentationFactory
                     ).fatigueGain
             val gaugeMax = RESIDUAL_FATIGUE_GAUGE_MAX * gain
 
-            val status =
-                when {
-                    value == null -> MetricStatus.NO_DATA
-                    value < RESIDUAL_FATIGUE_OPTIMAL_BELOW * gain -> MetricStatus.OPTIMAL
-                    value <= RESIDUAL_FATIGUE_NEUTRAL_THROUGH * gain -> MetricStatus.NEUTRAL
-                    else -> MetricStatus.WARNING
-                }
+            val status = ResidualFatigueThresholds.classify(value, gain)
 
             val valueText = value?.let { MetricFormatter.formatDecimal(it, 1) } ?: unavailableValueText
 
