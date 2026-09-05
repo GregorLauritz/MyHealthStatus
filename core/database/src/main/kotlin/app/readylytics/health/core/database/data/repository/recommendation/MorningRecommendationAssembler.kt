@@ -1,0 +1,157 @@
+package app.readylytics.health.core.database.data.repository.recommendation
+
+import app.readylytics.health.core.database.data.repository.ScoringDayContext
+import app.readylytics.health.core.model.domain.model.SleepSession
+import app.readylytics.health.core.model.domain.recommendation.WorkoutRecommendationSnapshot
+import app.readylytics.health.core.model.domain.recommendation.WorkoutRecommendationState
+import app.readylytics.health.core.model.domain.repository.SleepSessionData
+import app.readylytics.health.core.model.domain.repository.SleepSessionRepository
+import app.readylytics.health.core.scoring.domain.recommendation.ComputeWorkoutRecommendationUseCase
+import app.readylytics.health.core.scoring.domain.recommendation.SelectMorningSleepSession
+import app.readylytics.health.core.scoring.domain.recommendation.SelectWorkoutRecommendationExamples
+import app.readylytics.health.core.scoring.domain.recommendation.WorkoutRecommendationInput
+import app.readylytics.health.core.scoring.domain.scoring.CircadianWakeBaseline
+import java.time.Instant
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/** Rule version stamped onto every snapshot this assembler produces. */
+private const val RULE_VERSION = 1
+
+/** How far back examples are drawn from, relative to the wake time. */
+private const val EXAMPLE_WINDOW_DAYS = 30L
+
+/** States that can be illustrated with past workouts; every other state ships no examples. */
+private val EXAMPLE_STATES =
+    setOf(WorkoutRecommendationState.EASY, WorkoutRecommendationState.HARDER)
+
+/**
+ * Composes the morning workout guidance for one local day.
+ *
+ * Every step is anchored to the end of the sleep record chosen for the morning, so the snapshot for
+ * a day is the same whether it is computed that morning or replayed months later during a resync:
+ * the recovery inputs are bounded at the wake time, and the example window is the 30 days ending
+ * there. Nothing recorded later that day — a nap, an evening workout, a fresh HRV sample — can move
+ * the result.
+ *
+ * The decision itself is [ComputeWorkoutRecommendationUseCase]'s alone; this class only feeds it and
+ * decides whether examples are worth loading.
+ */
+@Singleton
+class MorningRecommendationAssembler
+    @Inject
+    constructor(
+        private val sleepSessionRepository: SleepSessionRepository,
+        private val recoveryLoader: MorningRecoveryLoader,
+        private val exampleLoader: WorkoutExampleLoader,
+    ) {
+        // Stateless pure helpers, constructed rather than injected so the graph stays free of
+        // bindings for types that carry no dependencies of their own.
+        private val evaluator = ComputeWorkoutRecommendationUseCase()
+        private val sessionSelector = SelectMorningSleepSession()
+        private val exampleSelector = SelectWorkoutRecommendationExamples()
+
+        /**
+         * [previous] is the snapshot already stored for this day, when there is one. Its source
+         * session is kept across ordinary daytime appends — re-read from Room, so a corrected
+         * timestamp or stage breakdown is picked up — and only a source that no longer exists
+         * triggers a fresh selection.
+         */
+        suspend fun assemble(
+            context: ScoringDayContext,
+            previous: WorkoutRecommendationSnapshot? = null,
+        ): WorkoutRecommendationSnapshot {
+            val history =
+                sleepSessionRepository.getSince(context.nextDayMidnightMs - CIRCADIAN_HISTORY_WINDOW_MS)
+            val session =
+                resolveMorningSession(context, history, previous)
+                    ?: return WorkoutRecommendationSnapshot(
+                        ruleVersion = RULE_VERSION,
+                        wakeSessionId = null,
+                        wakeTimeMs = null,
+                        decision = evaluator.compute(noSleepInput(context)),
+                    )
+
+            val wakeTimeMs = session.endTime
+            val decision = evaluator.compute(recoveryLoader.load(context, session, history))
+            val examples =
+                if (decision.state in EXAMPLE_STATES) {
+                    val fromMs =
+                        Instant
+                            .ofEpochMilli(wakeTimeMs)
+                            .atZone(context.zoneId)
+                            .minusDays(EXAMPLE_WINDOW_DAYS)
+                            .toInstant()
+                            .toEpochMilli()
+                    exampleSelector.select(
+                        decision.state,
+                        exampleLoader.load(fromMs, wakeTimeMs, context.prefs),
+                        fromMs,
+                        wakeTimeMs,
+                    )
+                } else {
+                    emptyList()
+                }
+
+            return WorkoutRecommendationSnapshot(
+                ruleVersion = RULE_VERSION,
+                wakeSessionId = session.id,
+                wakeTimeMs = wakeTimeMs,
+                decision = decision,
+                examples = examples,
+            )
+        }
+
+        private fun resolveMorningSession(
+            context: ScoringDayContext,
+            history: List<SleepSessionData>,
+            previous: WorkoutRecommendationSnapshot?,
+        ): SleepSession? {
+            val candidates =
+                history
+                    .filter {
+                        Instant.ofEpochMilli(it.endTime).atZone(context.zoneId).toLocalDate() == context.targetDate
+                    }.map { it.toDomainSession() }
+            val retained =
+                previous?.wakeSessionId?.let { storedId -> candidates.firstOrNull { it.id == storedId } }
+            return retained ?: selectByHabitualWake(context, history, candidates)
+        }
+
+        private fun selectByHabitualWake(
+            context: ScoringDayContext,
+            history: List<SleepSessionData>,
+            candidates: List<SleepSession>,
+        ): SleepSession? {
+            val usualWakeMinutes =
+                CircadianWakeBaseline
+                    .resolve(
+                        sessions = history.filter { it.endTime < context.dayMidnightMs },
+                        baselineCount = context.prefs.consistencyBaselineDays,
+                        zone = context.zoneId,
+                    )?.medianWakeMinutes
+            // Without a habitual wake time there is nothing to measure distance against, and
+            // substituting a default clock time is forbidden. The snapshot still names a source so
+            // the unavailable state can be explained, chosen by the same deterministic tiebreak the
+            // distance ordering falls back on.
+            return if (usualWakeMinutes == null) {
+                candidates.minWithOrNull(compareBy({ it.endTime }, { it.id }))
+            } else {
+                sessionSelector.select(candidates, context.targetDate, context.zoneId, usualWakeMinutes)
+            }
+        }
+
+        private fun noSleepInput(context: ScoringDayContext): WorkoutRecommendationInput =
+            WorkoutRecommendationInput(
+                hasSleep = false,
+                nightlyHrv = null,
+                isCalibrating = false,
+                hasCircadianBaseline = false,
+                zLnHrv = null,
+                lowHrvBound = null,
+                highHrvBound = null,
+                sleepScore = null,
+                residualFatigue = null,
+                fatigueGain = context.prefs.residualFatigueGain,
+                recoveryFlags = emptySet(),
+            )
+    }

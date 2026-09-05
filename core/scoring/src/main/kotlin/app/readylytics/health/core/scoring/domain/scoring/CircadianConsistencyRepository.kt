@@ -18,15 +18,11 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
-import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.abs
-
-private const val MIN_BASELINE_SESSIONS = 3
-private const val NAP_THRESHOLD_MINUTES = 180
 
 sealed class CircadianConsistencyResult {
     data object Calibrating : CircadianConsistencyResult()
@@ -120,16 +116,11 @@ class CircadianConsistencyRepository
             val baselineCount = prefs.consistencyBaselineDays
             val zone = prefs.scoringZone()
 
-            val validSessions =
-                sessions
-                    .filter { it.durationMinutes >= NAP_THRESHOLD_MINUTES }
-                    .sortedByDescending { it.endTime }
+            val validSessions = CircadianWakeBaseline.qualifyingSessions(sessions)
 
-            val baselineSessions = validSessions.take(baselineCount)
-
-            if (baselineSessions.size < MIN_BASELINE_SESSIONS) {
-                return CircadianConsistencyResult.Calibrating
-            }
+            val baseline =
+                CircadianWakeBaseline.resolveFromQualifying(validSessions, baselineCount, zone)
+                    ?: return CircadianConsistencyResult.Calibrating
 
             val startOfDayMs =
                 anchorDate
@@ -141,8 +132,8 @@ class CircadianConsistencyRepository
                 return CircadianConsistencyResult.MissingData
             }
 
-            val medianBed = baselineSessions.map { normalizeMinutes(it.startTime, zone) }.median()
-            val medianWake = baselineSessions.map { normalizeMinutes(it.endTime, zone) }.median()
+            val medianBed = baseline.medianBedtimeMinutes
+            val medianWake = baseline.medianWakeMinutes
 
             val evalSessions = validSessions.take(evalCount)
             if (evalSessions.isEmpty()) {
@@ -200,15 +191,5 @@ class CircadianConsistencyRepository
         private fun normalizeMinutes(
             epochMs: Long,
             zone: ZoneId,
-        ): Int {
-            val zdt = Instant.ofEpochMilli(epochMs).atZone(zone)
-            val minutes = zdt.hour * 60 + zdt.minute
-            return if (minutes < 12 * 60) minutes + 1440 else minutes
-        }
-
-        private fun List<Int>.median(): Int {
-            val sorted = sorted()
-            val mid = size / 2
-            return if (size % 2 == 0) (sorted[mid - 1] + sorted[mid]) / 2 else sorted[mid]
-        }
+        ): Int = CircadianWakeBaseline.normalizeMinutes(epochMs, zone)
     }

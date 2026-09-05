@@ -1,0 +1,134 @@
+package app.readylytics.health.core.database.data.repository.recommendation
+
+import app.readylytics.health.core.model.data.preferences.scoringZone
+import app.readylytics.health.core.model.domain.model.DailySummary
+import app.readylytics.health.core.model.domain.preferences.UserPreferences
+import app.readylytics.health.core.model.domain.recommendation.WorkoutRecommendationExample
+import app.readylytics.health.core.model.domain.repository.DailySummaryRepository
+import app.readylytics.health.core.model.domain.repository.WorkoutData
+import app.readylytics.health.core.model.domain.repository.WorkoutRepository
+import app.readylytics.health.core.model.domain.scoring.ScoringConstants
+import app.readylytics.health.core.model.domain.scoring.WorkoutLoadLevel
+import app.readylytics.health.core.scoring.domain.scoring.GetWorkoutDisplayMetricsUseCase
+import java.time.Instant
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * Below this the workout is a warm-up or a stray record, not an example worth showing. Mirrors the
+ * eligibility threshold `SelectWorkoutRecommendationExamples` applies, so rows that could never
+ * survive selection are dropped before the expensive metrics call rather than after it.
+ */
+private const val MIN_EXAMPLE_DURATION_MINUTES = 15
+
+/** Bounds the memo so a long historical replay cannot grow it without limit. */
+private const val MAX_MEMOIZED_WORKOUTS = 512
+
+/**
+ * Loads the user's own past workouts as candidate examples for the morning recommendation.
+ *
+ * The final load level is [GetWorkoutDisplayMetricsUseCase]'s canonical classification, not a
+ * re-derived score, so an example reads exactly as the workout does everywhere else in the app.
+ * That call is expensive, so rows are narrowed to the ones that could survive selection *before*
+ * it runs, the 42-day summary history it needs is fetched once per window instead of per workout,
+ * and repeated workout ids within a historical pass are memoized.
+ */
+@Singleton
+class WorkoutExampleLoader
+    @Inject
+    constructor(
+        private val workoutRepository: WorkoutRepository,
+        private val dailySummaryRepository: DailySummaryRepository,
+        private val getWorkoutDisplayMetricsUseCase: GetWorkoutDisplayMetricsUseCase,
+    ) {
+        private data class MemoKey(
+            val workoutId: String,
+            val prefs: UserPreferences,
+        )
+
+        // Guarded by its own monitor: the loader is a singleton and nothing else serializes callers.
+        // A racing duplicate compute is harmless; a corrupted map is not.
+        private val loadLevelMemo =
+            object : LinkedHashMap<MemoKey, WorkoutLoadLevel?>(MAX_MEMOIZED_WORKOUTS, 0.75f, true) {
+                override fun removeEldestEntry(eldest: Map.Entry<MemoKey, WorkoutLoadLevel?>): Boolean =
+                    size > MAX_MEMOIZED_WORKOUTS
+            }
+
+        suspend fun load(
+            fromMs: Long,
+            throughMs: Long,
+            prefs: UserPreferences,
+        ): List<WorkoutRecommendationExample> {
+            val candidates =
+                if (throughMs <= fromMs) {
+                    emptyList()
+                } else {
+                    workoutRepository
+                        .getInRange(fromMs, throughMs)
+                        .filter { it.isEligibleExample(fromMs, throughMs) }
+                }
+            if (candidates.isEmpty()) return emptyList()
+
+            val historicalSummaries = loadHistoricalSummaries(candidates, prefs)
+            return candidates.mapNotNull { workout ->
+                resolveFinalLoad(workout, prefs, historicalSummaries)?.let { workout.toExample(it) }
+            }
+        }
+
+        private suspend fun loadHistoricalSummaries(
+            candidates: List<WorkoutData>,
+            prefs: UserPreferences,
+        ) = dailySummaryRepository.getSince(
+            Instant
+                .ofEpochMilli(candidates.minOf { it.startTime })
+                .atZone(prefs.scoringZone())
+                .toLocalDate()
+                .minusDays(ScoringConstants.CHRONIC_DAYS)
+                .atStartOfDay(prefs.scoringZone())
+                .toInstant()
+                .toEpochMilli(),
+        )
+
+        private suspend fun resolveFinalLoad(
+            workout: WorkoutData,
+            prefs: UserPreferences,
+            historicalSummaries: List<DailySummary>,
+        ): WorkoutLoadLevel? {
+            val key = MemoKey(workout.id, prefs)
+            synchronized(loadLevelMemo) {
+                if (loadLevelMemo.containsKey(key)) return loadLevelMemo[key]
+            }
+            val level =
+                getWorkoutDisplayMetricsUseCase
+                    .execute(
+                        workout = workout,
+                        preferences = prefs,
+                        historicalSummaries = historicalSummaries,
+                    ).classification
+                    ?.finalLoad
+            synchronized(loadLevelMemo) { loadLevelMemo[key] = level }
+            return level
+        }
+
+        private fun WorkoutData.isEligibleExample(
+            fromMs: Long,
+            throughMs: Long,
+        ): Boolean =
+            durationMinutes > MIN_EXAMPLE_DURATION_MINUTES &&
+                exerciseType.isNotBlank() &&
+                endTime > startTime &&
+                startTime >= fromMs &&
+                endTime <= throughMs
+
+        private fun WorkoutData.toExample(finalLoad: WorkoutLoadLevel): WorkoutRecommendationExample =
+            WorkoutRecommendationExample(
+                workoutId = id,
+                exerciseType = exerciseType,
+                startTimeMs = startTime,
+                endTimeMs = endTime,
+                durationMinutes = durationMinutes,
+                // A zero or non-finite average is "not recorded", never "resting" — omit it.
+                averageHr = avgHr.takeIf { it.isFinite() && it > 0f },
+                finalLoad = finalLoad,
+            )
+    }

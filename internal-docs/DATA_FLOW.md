@@ -1280,9 +1280,8 @@ Training Stress Balance (TSB) represents readiness based on training load, calcu
 
 A daily HRV-guided workout recommendation (Rest / Easy / Harder, plus several "unavailable"
 states) is decided by the pure `ComputeWorkoutRecommendationUseCase` (`core/scoring/.../domain/recommendation/`).
-This is Task 1 of the feature — the evaluator itself; upstream input resolution, historical
-example selection, snapshot persistence, and Dashboard presentation are separate, later tasks and
-are documented here only where their contract is already fixed by the evaluator's shape.
+The evaluator is described first; §2.11.1–§2.11.4 then describe how a morning snapshot is
+assembled around it. Snapshot persistence and Dashboard presentation are separate, later tasks.
 
 **Contract.** `compute(input: WorkoutRecommendationInput): WorkoutRecommendationDecision` performs
 no reads, clock access, Health Connect/Room lookups, or string localization — every field of
@@ -1323,6 +1322,93 @@ other collected reason, not just illness). Otherwise any non-empty reason list �
 reason list → `HARDER`, and the decision's `reasons` becomes the single-element
 `[WITHIN_USUAL_RANGE]` rather than staying empty, so a Rest/Easy/Harder decision always carries at
 least one reason for display.
+
+#### 2.11.1 Morning snapshot & date anchoring
+
+`MorningRecommendationAssembler` (`core/database/.../data/repository/recommendation/`) composes one
+`WorkoutRecommendationSnapshot` (`core:model`, `domain/recommendation/`) per local scoring day:
+`ruleVersion`, the chosen `wakeSessionId`/`wakeTimeMs`, the `WorkoutRecommendationDecision`, and up
+to three `WorkoutRecommendationExample` rows. It takes the existing `ScoringDayContext` — the same
+per-day context the daily summary pipeline resolves (§2.1) — so the frozen baselines, scoring
+config, and preferences it uses are the day's own, not today's.
+
+**The anchor is a recorded wake time, never a wall clock.** Everything in the snapshot is bounded at
+the end of one selected sleep record:
+
+1. `sleepSessionRepository.getSince(nextDayMidnight − CIRCADIAN_CONSISTENCY_WINDOW_DAYS)` loads the
+   sleep history once, for both the anchor and the bounded scoring pass.
+2. `CircadianWakeBaseline.resolve(...)` (`core/scoring/.../domain/scoring/`) derives the habitual
+   wake time from sessions ending **strictly before the target day starts**, so the day being scored
+   can never define its own "usual". This is the ≥180-minute / ≥3-session / `consistencyBaselineDays`
+   baseline routine extracted from `CircadianConsistencyRepository`, which now calls the same object
+   — the circadian consistency score's own behaviour is unchanged. Fewer than three qualifying
+   nights means *no* baseline; no noon/07:00 default is substituted.
+3. `SelectMorningSleepSession.select(sessions, date, zone, usualWakeMinutes)` (pure,
+   `core/scoring/.../domain/recommendation/`) keeps every record whose **end** falls on the target
+   local date and picks the one whose wake time is closest to the habitual wake time measured
+   **around the clock face** (`min(|Δ|, 1440 − |Δ|)`), tie-breaking by earliest end time then stable
+   id. A later nap therefore cannot displace the morning record merely by being more recent. Source
+   filtering is whatever Room already applied; it is not re-applied here.
+4. With a previously stored snapshot in hand, the assembler keeps its `wakeSessionId` across ordinary
+   daytime appends but re-reads the row, so corrected timestamps/stages are picked up. A source that
+   no longer exists triggers a fresh selection. With no circadian baseline at all, the snapshot still
+   names a source (earliest end, then id) so the unavailable state can be explained.
+5. No sleep record ending on the date → `wakeSessionId`/`wakeTimeMs` are null and the evaluator is
+   asked with `hasSleep = false`, yielding `NO_SLEEP`.
+
+#### 2.11.2 Bounded recovery inputs (`MorningRecoveryLoader`)
+
+The loader does **not** copy the completed day's stored `zLnHrv`, sleep score, or illness flag:
+those are computed at next-day midnight, where a nap recorded later the same day can still move
+them. Instead it re-runs the *same* `ComputeSleepMetricsUseCase` with the same formulas and a
+narrowed `SleepMetricsRequest`:
+
+- `dayEndMs = wakeTimeMs`, so `resolveBaselineWindow`'s RHR history and HRV μ/σ windows stop at the
+  wake time;
+- `currentSessionIds = { selected session }`, so nightly HRV (`CurrentNightHrvResolver`, floating
+  mean — never a rounded UI value) and nocturnal RHR come from that record alone;
+- `prefetchedSessions` pre-truncated at the wake time, so the regularity modifier's circadian score
+  (`SleepModifierResolver` → `CircadianConsistencyRepository.scoreFor`) cannot see a later nap.
+
+No new request fields were needed; the three above already existed for ordinary daily scoring, which
+continues to pass next-day midnight, the aggregated core cluster, and the walk-forward prefetch.
+
+The remaining inputs: HRV deviation bounds are `EmergencyFlagThresholds.illnessZHrvThreshold` /
+`.strongRecoveryZHrvThreshold` from the **frozen** profile (`DailySummary.snapshotProfile`, rebuilt
+through `ScoringConfigFactory` when it differs from the live preference), so switching profile later
+cannot retroactively move a frozen day's bounds — and a positive strong-recovery flag is never
+treated as permission to train harder, it only defines the upper bound. Residual fatigue comes from
+`ResidualFatigueComputer.computeAt(wakeTimeMs, prefs)` (§2.8), which reuses the exact single-day
+fallback and its never-backfilled gate, never advances the shared day-end walk-forward accumulator,
+and is not persisted; `computeLive` is now a thin alias of it. A failed sleep-metrics pass is
+re-thrown rather than degraded, so an operational read failure retries the outer computation instead
+of storing a fabricated "no data" state; `CancellationException` propagates throughout.
+
+#### 2.11.3 Historical examples (`WorkoutExampleLoader` → `SelectWorkoutRecommendationExamples`)
+
+Only `EASY` and `HARDER` decisions load examples. The window is `wakeTime − 30 days` through
+`wakeTime`. `WorkoutExampleLoader` narrows candidate rows first (duration > 15 min, non-blank
+exercise type, fully inside the window), fetches the 42-day summary history once per window rather
+than per workout, and memoizes `GetWorkoutDisplayMetricsUseCase.execute` per (workout id,
+preferences) so a historical replay does not re-run it for repeated ids. `finalLoad` is that use
+case's canonical `classification.finalLoad` — not a re-derived score — so an example reads exactly
+as the workout does elsewhere; rows with no classification are dropped, and a non-finite or
+non-positive average HR is omitted rather than reported as zero.
+
+The pure `SelectWorkoutRecommendationExamples` then filters by allowed load level (`EASY` →
+`VERY_LIGHT`/`LIGHT`; `HARDER` → `MODERATE`/`HARD`/`VERY_HARD`), sorts by end time descending with
+`workoutId` as the final tiebreak, de-duplicates by exercise type, and takes at most three.
+
+#### 2.11.4 Determinism
+
+A day's snapshot is a function of the stored rows and the wake anchor alone, so computing it once on
+the morning itself and replaying it during a full historical resync produce identical output.
+Concretely: the anchor comes from recorded end times (not `Instant.now()`); the habitual wake time
+uses only strictly-earlier days; every read is bounded at the wake time; residual fatigue is
+evaluated at the wake time through the exact reconstruction path; and every ordering has a stable
+final tiebreak. A nap recorded that afternoon and a workout recorded that evening leave the complete
+snapshot byte-for-byte unchanged — this is asserted directly in
+`MorningRecommendationAssemblerTest`.
 
 ---
 
@@ -1546,9 +1632,17 @@ defaults when unset).
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/recommendation/WorkoutRecommendation.kt` | Domain — recommendation model | `WorkoutRecommendationState`/`WorkoutRecommendationReason`/`WorkoutRecommendationDecision` (§2.11) |
 | `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/recommendation/WorkoutRecommendationInput.kt` | Processing — recommendation input | fully-resolved parameter object, no reads/clock (§2.11) |
 | `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/recommendation/ComputeWorkoutRecommendationUseCase.kt` | Processing — workout recommendation (pure) | availability gate + ordered reason collection → Rest/Easy/Harder decision (§2.11) |
+| `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/recommendation/WorkoutRecommendationExample.kt` | Domain — recommendation example | one past workout offered as an example; carries the canonical `finalLoad` (§2.11.3) |
+| `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/recommendation/WorkoutRecommendationSnapshot.kt` | Domain — recommendation snapshot | `ruleVersion` + wake anchor + decision + examples for one local day (§2.11.1) |
+| `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/recommendation/SelectWorkoutRecommendationExamples.kt` | Processing — example selection (pure) | allowed-load filter, end-time-desc sort with stable id tiebreak, dedup by exercise type, cap 3 (§2.11.3) |
+| `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/recommendation/SelectMorningSleepSession.kt` | Processing — wake anchor (pure) | circular clock distance to the habitual wake time; ties by earliest end then stable id (§2.11.1) |
+| `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/scoring/CircadianWakeBaseline.kt` | Processing — habitual bed/wake times (pure) | shared ≥180-min / ≥3-session baseline selection + median, used by the circadian score and the morning anchor (§2.11.1) |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/recommendation/MorningRecommendationAssembler.kt` | Processing — morning snapshot | anchor selection → bounded recovery inputs → evaluator → example selection (§2.11.1) |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/recommendation/MorningRecoveryLoader.kt` | Processing — bounded recovery inputs | re-runs `ComputeSleepMetricsUseCase` bounded at the wake time; frozen-profile HRV bounds; `computeAt` fatigue (§2.11.2) |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/recommendation/WorkoutExampleLoader.kt` | Processing — example candidates | 30-day pre-wake window, pre-narrowed rows, one summary prefetch, memoized display metrics (§2.11.3) |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/repository/WalkForwardFatigueContext.kt` | Processing — walk-forward accumulator | prefetched impulse series + running accumulated fatigue (WP-27) |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/repository/WalkForwardVo2MaxContext.kt` | Processing — walk-forward VO2 Max lookup | prefetched wearable VO2 Max readings (`TreeMap<Long, Float>`), `floorEntry`-based per-day lookup (§2.6) |
-| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/ResidualFatigueComputer.kt` | Processing — fatigue snapshot | per-day snapshot at next-day midnight (`compute`); live non-persisting decay through `nowMs` (`computeLive`); exact retained-history seed (§2.8) |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/ResidualFatigueComputer.kt` | Processing — fatigue snapshot | per-day snapshot at next-day midnight (`compute`); non-persisting decay through any instant (`computeAt`, aliased by `computeLive`); exact retained-history seed (§2.8, §2.11.2) |
 | `feature/dashboard/src/main/kotlin/app/readylytics/health/feature/dashboard/usecase/GetCurrentResidualFatigueUseCase.kt` | Domain — today-only gate | live residual fatigue gate for today (`clock.withZone(scoringZoneId)`); `NotApplicable` for past/future days, `Unavailable` when gated (§2.8) |
 | `feature/dashboard/src/main/kotlin/app/readylytics/health/feature/dashboard/usecase/LiveResidualFatigue.kt` | Domain — tri-state | separates "use the snapshot" from "unknown", so a gated today cannot render the understated snapshot (§2.8) |
 | `feature/dashboard/src/main/kotlin/app/readylytics/health/feature/dashboard/DashboardFatigueTicker.kt` | UI — refresh cadence | minute-bucket flow driving live fatigue re-decay while the dashboard is subscribed (§2.8) |

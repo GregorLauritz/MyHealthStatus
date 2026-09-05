@@ -82,19 +82,27 @@ class ResidualFatigueComputer(
     }
 
     /**
-     * Residual fatigue decayed through [nowMs] instead of [compute]'s persisted next-day-midnight
-     * snapshot. Reuses [computeSingleDayFallback] verbatim — reconstructs from every retained
-     * canonical impulse through [nowMs], with the same unbackfilled-gap gate as [compute].
+     * Residual fatigue decayed through [evaluationTimeMs] instead of [compute]'s persisted
+     * next-day-midnight snapshot. Reuses [computeSingleDayFallback] verbatim — reconstructs from
+     * every retained canonical impulse through [evaluationTimeMs], with the same unbackfilled-gap
+     * gate as [compute], so a never-backfilled retained workout yields null (unknown) rather than a
+     * silently low number.
+     *
      * Never touches the walk-forward accumulator and is not persisted, so it cannot desync
-     * `daily_summaries` or a resync's exact-reconstruction guarantees.
+     * `daily_summaries` or a resync's exact-reconstruction guarantees, and it can be called at any
+     * instant — including a past morning's wake time during a historical replay — without moving
+     * the shared day-end accumulator backwards.
      */
+    suspend fun computeAt(
+        evaluationTimeMs: Long,
+        prefs: UserPreferences,
+    ): Float? = computeSingleDayFallback(evaluationTimeMs, clampedConfig(prefs), prefs)
+
+    /** [computeAt] at the current instant, for the live dashboard card. */
     suspend fun computeLive(
         nowMs: Long,
         prefs: UserPreferences,
-    ): Float? {
-        val config = clampedConfig(prefs)
-        return computeSingleDayFallback(nowMs, config, prefs)
-    }
+    ): Float? = computeAt(nowMs, prefs)
 
     private fun computeWalkForward(
         fatigueContext: WalkForwardFatigueContext,
