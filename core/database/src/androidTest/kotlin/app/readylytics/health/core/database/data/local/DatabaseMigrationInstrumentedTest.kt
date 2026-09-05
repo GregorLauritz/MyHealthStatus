@@ -347,6 +347,48 @@ class DatabaseMigrationInstrumentedTest {
         }
     }
 
+    @Test
+    fun migrate18To19AddsWorkoutRecommendationJsonColumnAndPreservesExistingData() {
+        helper.createDatabase(TEST_DATABASE, 18).apply {
+            execSQL(
+                "INSERT INTO daily_summaries (dateMidnightMs, sleepScore, " +
+                    "diag_isCalibrating, diag_stagesSuspicious, diag_lateNadir, " +
+                    "diag_hrvMissing, diag_timezoneJump) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                arrayOf<Any>(1_234L, 87.5f, 0, 0, 0, 0, 0),
+            )
+            close()
+        }
+
+        val database = helper.runMigrationsAndValidate(TEST_DATABASE, 19, true, *DatabaseMigrations.all)
+
+        // Existing row survives losslessly; new column is additive and NULL for pre-migration rows.
+        database.query(
+            "SELECT dateMidnightMs, sleepScore, workoutRecommendationJson FROM daily_summaries",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(1_234L, cursor.getLong(0))
+            assertEquals(87.5, cursor.getFloat(1).toDouble(), 0.001)
+            assertTrue(cursor.isNull(2))
+        }
+
+        // New column accepts a written snapshot payload, the shape the codec produces.
+        database.execSQL(
+            "UPDATE daily_summaries SET workoutRecommendationJson = ? WHERE dateMidnightMs = ?",
+            arrayOf<Any>(
+                "{\"ruleVersion\":1,\"wakeSessionId\":null,\"wakeTimeMs\":null," +
+                    "\"decision\":{\"state\":\"NO_SLEEP\",\"reasons\":[]},\"examples\":[]}",
+                1_234L,
+            ),
+        )
+        database.query(
+            "SELECT workoutRecommendationJson FROM daily_summaries WHERE dateMidnightMs = ?",
+            arrayOf<Any>(1_234L),
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.getString(0).contains("NO_SLEEP"))
+        }
+    }
+
     private fun androidx.sqlite.db.SupportSQLiteDatabase.insertWorkout(id: String) {
         execSQL(
             "INSERT INTO workout_records (id, startTime, endTime, exerciseType, durationMinutes, " +

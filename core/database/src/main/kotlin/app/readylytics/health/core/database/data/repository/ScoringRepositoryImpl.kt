@@ -13,13 +13,22 @@ import app.readylytics.health.core.model.domain.repository.WalkForwardBaselineCo
 import app.readylytics.health.core.model.domain.repository.WalkForwardContexts
 import app.readylytics.health.core.model.domain.repository.WalkForwardFatigueContext
 import app.readylytics.health.core.model.domain.repository.WalkForwardTrimpContext
+import app.readylytics.health.core.model.domain.repository.DailySummaryRepository
+import app.readylytics.health.core.model.domain.repository.SleepSessionRepository
 import app.readylytics.health.core.model.domain.repository.WalkForwardVo2MaxContext
+import app.readylytics.health.core.model.domain.repository.WorkoutRepository
 import app.readylytics.health.core.model.domain.scoring.ScoringConstants
 import app.readylytics.health.core.model.domain.util.logD
+import app.readylytics.health.core.database.data.repository.recommendation.MorningRecommendationAssembler
+import app.readylytics.health.core.database.data.repository.recommendation.MorningRecoveryLoader
+import app.readylytics.health.core.database.data.repository.recommendation.WorkoutExampleLoader
 import app.readylytics.health.core.scoring.domain.scoring.BaselineComputer
+import app.readylytics.health.core.scoring.domain.scoring.ComputeSleepMetricsUseCase
 import app.readylytics.health.core.scoring.domain.scoring.EverydayHrLoadResult
+import app.readylytics.health.core.scoring.domain.scoring.GetWorkoutDisplayMetricsUseCase
 import app.readylytics.health.core.scoring.domain.scoring.ScoringConfigFactory
 import app.readylytics.health.core.scoring.domain.scoring.TrimpDateBucketer
+import app.readylytics.health.core.scoring.domain.scoring.sleep.CurrentNightHrvResolver
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
@@ -34,6 +43,26 @@ import javax.inject.Singleton
 /** Trailing lookback for wearable VO2 Max readings, mirroring [FinalSummaryAssembler]'s per-day window. */
 private const val VO2_MAX_LOOKBACK_DAYS = 30L
 
+/**
+ * Hilt-injectable collaborators [MorningRecommendationAssembler] needs beyond what
+ * [ScoringRepositoryImpl] already builds for the rest of the daily pipeline (residual fatigue,
+ * calibration, baselines are reused directly -- see [ScoringRepositoryImpl.morningRecommendationAssembler]).
+ * Grouped into a parameter object for the same reason as [ScoringDataLoaders]/[ScoringDayUseCases]:
+ * six raw constructor parameters would have pushed [ScoringRepositoryImpl] over the detekt
+ * `LongParameterList` threshold.
+ */
+@Singleton
+data class MorningRecommendationDependencies
+    @Inject
+    constructor(
+        val sleepSessionRepository: SleepSessionRepository,
+        val computeSleepMetricsUseCase: ComputeSleepMetricsUseCase,
+        val hrvResolver: CurrentNightHrvResolver,
+        val workoutRepository: WorkoutRepository,
+        val dailySummaryRepository: DailySummaryRepository,
+        val getWorkoutDisplayMetricsUseCase: GetWorkoutDisplayMetricsUseCase,
+    )
+
 @Singleton
 class ScoringRepositoryImpl
     @Inject
@@ -46,6 +75,12 @@ class ScoringRepositoryImpl
         private val scoringHistoryRepository: ScoringHistoryRepository,
         private val readinessSummaryCoordinator: ReadinessSummaryCoordinator,
         @DefaultDispatcher private val defaultDispatcher: CoroutineDispatcher,
+        // Nullable with a default so the many pre-existing tests that construct this class
+        // positionally (predating the recommendation feature) keep compiling unchanged; Hilt always
+        // supplies a real instance in production regardless of the Kotlin-side default. Null here
+        // simply means "morning workout guidance is not computed this pass" -- see
+        // [morningRecommendationAssembler].
+        private val recommendationDependencies: MorningRecommendationDependencies? = null,
     ) : ScoringRepository {
         private val calculationMutex = Mutex()
 
@@ -81,6 +116,32 @@ class ScoringRepositoryImpl
                     useCases.vo2MaxSourceResolver,
                 ),
             )
+
+        // Null only when `recommendationDependencies` is null (see its constructor doc) -- every
+        // production Hilt graph supplies a real one, so morning workout guidance is always computed
+        // there. Reuses this repository's own `residualFatigueComputer`/`calibrationGate` rather than
+        // separate instances: both are stateless aside from the caller-passed walk-forward context
+        // (see `ResidualFatigueComputer`), so sharing them is equivalent to Hilt providing fresh ones.
+        private val morningRecommendationAssembler =
+            recommendationDependencies?.let { deps ->
+                MorningRecommendationAssembler(
+                    deps.sleepSessionRepository,
+                    MorningRecoveryLoader(
+                        deps.sleepSessionRepository,
+                        deps.computeSleepMetricsUseCase,
+                        deps.hrvResolver,
+                        residualFatigueComputer,
+                        scoringConfigFactory,
+                        baselineComputer,
+                        calibrationGate,
+                    ),
+                    WorkoutExampleLoader(
+                        deps.workoutRepository,
+                        deps.dailySummaryRepository,
+                        deps.getWorkoutDisplayMetricsUseCase,
+                    ),
+                )
+            }
 
         override suspend fun computeAndPersistDailySummary(
             targetDate: LocalDate,
@@ -231,7 +292,7 @@ class ScoringRepositoryImpl
                     rasTotals.last6DaysRasWorkoutOnly,
                     finalSummary.totalRasWorkoutOnly,
                 )
-                finalSummary
+                morningRecommendationAssembler.applyRecommendation(context, finalSummary)
             }
 
         override suspend fun persist(summary: DailySummary) {
@@ -240,6 +301,23 @@ class ScoringRepositoryImpl
 
         override suspend fun toReadinessResult(summary: DailySummary): ReadinessResult = summary.readinessResult
     }
+
+/**
+ * Anchored to the wake time, entirely independent of the TRIMP/readiness pipeline that produced
+ * [finalSummary]; a thrown exception here surfaces before `persist`/`computeAndPersistDailySummary`
+ * ever calls `dataLoader.persistDailySummary`, so a failed assembly leaves the day's prior row
+ * untouched rather than partially overwriting it. Never recurses back into `computeDailySummary`.
+ * `this` is null only when [ScoringRepositoryImpl]'s `recommendationDependencies` is null (see its
+ * constructor doc) -- production Hilt injection always supplies a real assembler.
+ */
+private suspend fun MorningRecommendationAssembler?.applyRecommendation(
+    context: ScoringDayContext,
+    finalSummary: DailySummary,
+): DailySummary {
+    val recommendation =
+        this?.assemble(context, previous = context.dailySummary?.workoutRecommendation) ?: return finalSummary
+    return finalSummary.copy(workoutRecommendation = recommendation)
+}
 
 /** A null [steps] means no fresh count for the day; the stored value is preserved. */
 private fun DailySummary.withStepCount(steps: Long?): DailySummary =

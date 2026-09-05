@@ -108,6 +108,10 @@ data class DailySummaryEntity(
     val trainingReadinessEverydayHr: Float? = null,
     val vo2Max: Float? = null,
     val vo2MaxSource: String? = null,
+    // Opaque JSON blob written/read exclusively through `WorkoutRecommendationCodec`; this column
+    // never gets parsed here. Null on every row from before this column existed, and stays null
+    // when the codec rejects a payload rather than coercing it into a decision.
+    val workoutRecommendationJson: String? = null,
 ) {
     val diagnostics: Diagnostics
         get() = diagnosticsEmbedded

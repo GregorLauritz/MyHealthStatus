@@ -388,7 +388,13 @@ Version 17 (`Migration16To17`) adds nullable Training Readiness projection colum
 Version 18 (`Migration17To18`) adds the `vo2_max_records` table and index (`index_vo2_max_records_timestampMs`)
 for VO2 max ingestion from Health Connect, and adds nullable `vo2Max` and `vo2MaxSource` columns to
 `daily_summaries`; existing rows remain null until populated.
-The current Room schema version = 18.
+Version 19 (`Migration18To19`) adds one nullable `daily_summaries.workoutRecommendationJson` TEXT column
+(`ALTER TABLE daily_summaries ADD COLUMN workoutRecommendationJson TEXT DEFAULT NULL`) holding the
+opaque encoded `WorkoutRecommendationSnapshot` for the day (see "Morning workout recommendation
+persistence" below); existing rows remain null until a future recompute populates them, and a null
+value there means "not calculated yet," distinct from an assembled snapshot whose decision itself is
+an unavailable state (e.g. `CALIBRATING`).
+The current Room schema version = 19.
 
 **Workout distance and elevation come from separate records, not the session.** An
 `ExerciseSessionRecord` carries no distance — the recording app writes `DistanceRecord` and
@@ -506,7 +512,7 @@ per-bucket (min/avg/max or percentile) replay values are unchanged.
 | `BloodPressureRecordEntity`    | `blood_pressure_records`    | `id: String` (composite)               | systolic/diastolic, `timestampMs`, `deviceName`                                                                                                           |
 | `OxygenSaturationRecordEntity` | `oxygen_saturation_records` | `id: String` (composite)               | %, `timestampMs`, `deviceName`                                                                                                                            |
 | `BodyTemperatureRecordEntity`  | `body_temperature_records`  | `id: String` (composite)               | `celsius`, `timestampMs`, `deviceName`                                                                                                                     |
-| `DailySummaryEntity`           | `daily_summaries`           | `dateMidnightMs: Long`                 | computed scores (sleep/load/readiness), frozen baselines (`hrv_mu_mssd`, `hrv_sigma_mssd`, `rhr_bpm`, `rhr_sigma`, `hr_max`, …), weight/BP/SpO2/body-temp snapshots (`avgSleepingBodyTemp` — nightly average, never a scoring input), VO2 max snapshot (`vo2Max`, `vo2MaxSource`) |
+| `DailySummaryEntity`           | `daily_summaries`           | `dateMidnightMs: Long`                 | computed scores (sleep/load/readiness), frozen baselines (`hrv_mu_mssd`, `hrv_sigma_mssd`, `rhr_bpm`, `rhr_sigma`, `hr_max`, …), weight/BP/SpO2/body-temp snapshots (`avgSleepingBodyTemp` — nightly average, never a scoring input), VO2 max snapshot (`vo2Max`, `vo2MaxSource`), morning workout guidance (`workoutRecommendationJson` — opaque, encoded/decoded only via `WorkoutRecommendationCodec`, null means "not calculated yet") |
 | `Vo2MaxRecordEntity`           | `vo2_max_records`           | `id: String` (HC id)                   | `timestampMs`, `vo2Max` (mL/kg/min), `measurementMethod` (nullable), `deviceName`                                                                         |
 | `InsightDismissalEntity`       | `insight_dismissals`        | `(dateMidnightMs: Long, type: String)` | `type: String` (LATE_NADIR, SICK_INDICATOR, STRONG_RECOVERY_SIGNAL, LOAD_SPIKE_RECOVERY_STRAIN, …) — represents dismissed dashboard insights                                                       |
 | `AuditEventEntity`             | `audit_events`              | `id: Long` (auto)                      | `type`, `occurredAtEpochMs`, optional coarse `detail` for local backup/restore/key-lifecycle events                                                       |
@@ -1390,9 +1396,13 @@ that honoured it would silently switch bounding regimes the instant a day froze,
 a day and every *later* replay of the same day could disagree — defeating the reproducibility this section
 exists to guarantee. `SleepMetricsRequest.forceLiveBaselines` (default `false`) and
 `BaselineComputer.computeHrvWindowsBetween`/`computeAdaptiveBaselineRhrBpmBetween`'s `ignoreFrozenSnapshot`
-(default `false`) are the opt-outs that keep the recommendation on one regime. They are only sound for
-callers that do **not** persist what they compute; the recommendation path does not, so `daily_summaries`
-and the resync's exact-reconstruction guarantees are untouched.
+(default `false`) are the opt-outs that keep the recommendation on one regime. They are only sound because
+the recomputed values feed the evaluator alone and are never written back into `daily_summaries`'s frozen
+baseline columns (`hrv_mu_mssd`, `hrv_sigma_mssd`, `rhr_bpm`, `rhr_sigma`, …) or any TRIMP/readiness field —
+those, and the resync's exact-reconstruction guarantees, stay untouched. The *decision* the evaluator
+produces is persisted (§2.11.5, `daily_summaries.workoutRecommendationJson`), but that is a value object
+written once per day's assembly and replaced wholesale on the next one, not fed back into the baseline
+pipeline above.
 
 **Calibration.** `ComputeSleepMetricsUseCase` does not stamp `isCalibrating` on the summary it returns (it
 passes the caller's value straight through), so the loader resolves it through the same `CalibrationGate`
@@ -1439,6 +1449,52 @@ evaluated at the wake time through the exact reconstruction path; and every orde
 final tiebreak. A nap recorded that afternoon and a workout recorded that evening leave the complete
 snapshot byte-for-byte unchanged — this is asserted directly in
 `MorningRecommendationAssemblerTest`.
+
+#### 2.11.5 Persistence (`WorkoutRecommendationCodec`, `daily_summaries.workoutRecommendationJson`)
+
+`ScoringRepositoryImpl.computeDailySummary` calls `MorningRecommendationAssembler.assemble` last —
+after the daily TRIMP/RAS pass and `FinalSummaryAssembler.assemble` have produced `finalSummary` —
+and returns `finalSummary.copy(workoutRecommendation = assembler.assemble(context, previous =
+context.dailySummary?.workoutRecommendation))`. It never recurses back into `computeDailySummary`.
+`context.dailySummary` is the row already loaded for this exact day by
+`ScoringDayContextResolver.resolveScoringDayContext` (`scoringHistoryRepository.getDailySummaryByDate`),
+so `previous` is always the snapshot actually stored for that day, not a stale or cross-day value; it
+feeds `MorningRecommendationAssembler`'s source-session retention rule (§2.11.1) — passing only the
+one-argument `assemble(context)` would silently disable that retention and re-run selection from
+scratch on every call.
+
+`ScoringRepositoryImpl` builds its own `MorningRecommendationAssembler` from a `MorningRecommendationDependencies`
+holder (`SleepSessionRepository`, `ComputeSleepMetricsUseCase`, `CurrentNightHrvResolver`,
+`WorkoutRepository`, `DailySummaryRepository`, `GetWorkoutDisplayMetricsUseCase` — grouped for the same
+`LongParameterList` reason as `ScoringDataLoaders`/`ScoringDayUseCases`), reusing this repository's own
+`residualFatigueComputer`/`calibrationGate`/`baselineComputer`/`scoringConfigFactory` rather than
+separate instances — both collaborators are stateless aside from the caller-passed walk-forward
+context, so this is equivalent to Hilt providing fresh ones. The dependency holder is nullable
+(default `null`) purely so the repository's many pre-existing positional test call sites keep
+compiling; production Hilt injection always supplies a real one, and a `null` there simply skips
+recommendation assembly for that call (`workoutRecommendation` stays whatever the copy chain already
+carried, ordinarily `null`).
+
+`WorkoutRecommendationCodec` (`core/database/.../data/mapper/WorkoutRecommendationCodec.kt`) is the
+only place that turns a `WorkoutRecommendationSnapshot` into the column's TEXT value and back, using a
+dedicated `Json { ignoreUnknownKeys = true; encodeDefaults = true }` instance (no shared production
+`Json` existed elsewhere in this module to reuse; `encodeDefaults` keeps `ruleVersion` explicit in the
+stored payload, `ignoreUnknownKeys` lets a future app version's added fields round-trip through an
+older build). `decode` treats any unrecognized `ruleVersion`, any wake-session/wake-time nullness
+mismatch, more than three examples, or examples attached to a non-`EASY`/`HARDER` state as **absent**
+(`null`) rather than coercing it into a decision — a corrupt or future-version row must read back as
+"not calculated yet," never as a guessed `HARDER`. `DailySummaryMapper` calls the codec both ways
+(`toDomain`/`toEntity`), so the recommendation travels through the same single upsert as every other
+computed field — one `dailySummaryDao.upsert(entity)` call commits category, reasons, and examples
+together; there is no separate examples table. Because assembly runs and can throw *before* that
+`persist`/`computeAndPersistDailySummary` call, a failed assembly aborts the whole day's write and
+leaves the prior persisted row untouched rather than partially overwriting it.
+
+`daily_summaries.workoutRecommendationJson` is additive/nullable (schema v19, above); a `null` value
+means "not calculated yet" — including every row from before this column existed — and is presentation-
+distinct from an assembled snapshot whose own `decision.state` is an unavailable value such as
+`CALIBRATING`. That presentation distinction is drawn by the dashboard UI, not by this persistence
+layer.
 
 ---
 
@@ -1620,7 +1676,9 @@ defaults when unset).
 | `app/src/main/kotlin/app/readylytics/health/data/migration/V7DatabaseMigrator.kt`                                               | Storage — resumable external v7 migration           | preflight; 10k keyset copy/checkpoint; per-index transactions; validated atomic cutover  |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/migration/DatabaseMigrationModels.kt`                                 | Domain — migration contracts                        | readiness inspector/state; phase/progress/result models                                  |
 | `app/src/main/kotlin/app/readylytics/health/data/security/SqlCipherKeyManager.kt`                                               | Storage — scoped encrypted DB access                | opens raw SQLCipher DB only inside a callback and zeroes plaintext key bytes              |
-| `core/database-schema/src/main/kotlin/app/readylytics/health/core/databaseschema/data/local/entity/DailySummaryEntity.kt`             | Storage — computed-day snapshot                     | scores + frozen baselines                                                                |
+| `core/database-schema/src/main/kotlin/app/readylytics/health/core/databaseschema/data/local/entity/DailySummaryEntity.kt`             | Storage — computed-day snapshot                     | scores + frozen baselines + `workoutRecommendationJson` (opaque, §2.11.5)                |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/mapper/WorkoutRecommendationCodec.kt`                        | Storage — recommendation snapshot codec             | `encode`/`decode` `WorkoutRecommendationSnapshot` ↔ TEXT; rejects unknown version/invariants as null (§2.11.5) |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/local/migration/Migration18To19.kt`                          | Storage — schema v18→v19 migration                  | additive nullable `daily_summaries.workoutRecommendationJson` column                     |
 | `core/database-schema/src/main/kotlin/app/readylytics/health/core/databaseschema/data/local/entity/InsightDismissalEntity.kt`         | Storage — insight dismissal                         | dateMidnightMs + type                                                                    |
 | `core/database/src/main/kotlin/app/readylytics/health/core/database/data/local/entity/AuditEventEntity.kt`                       | Storage — local audit events                        | metadata-only backup/restore/key-lifecycle events                                        |
 | `core/database-schema/src/main/kotlin/app/readylytics/health/core/databaseschema/data/local/entity/WorkoutRoutePointEntity.kt`        | Storage — workout route points                      | normalized coordinates per workout; cascade-deleted with workout                          |

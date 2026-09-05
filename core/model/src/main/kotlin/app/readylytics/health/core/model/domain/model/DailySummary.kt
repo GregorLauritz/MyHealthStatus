@@ -1,5 +1,6 @@
 package app.readylytics.health.core.model.domain.model
 
+import app.readylytics.health.core.model.domain.recommendation.WorkoutRecommendationSnapshot
 import java.time.LocalDate
 
 data class DailySummary(
@@ -65,4 +66,8 @@ data class DailySummary(
     val trainingReadinessEverydayHr: Float? = null,
     val vo2Max: Float? = null,
     val vo2MaxSource: String? = null,
+    // Null means "not calculated yet" (never assembled, or migrated from a pre-recommendation row)
+    // -- distinct from a `CALIBRATING`/other unavailable decision, which is an assembled snapshot
+    // that just found nothing to recommend. Presentation must not conflate the two.
+    val workoutRecommendation: WorkoutRecommendationSnapshot? = null,
 )

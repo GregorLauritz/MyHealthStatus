@@ -151,6 +151,7 @@ object DailySummaryMapper {
             trainingReadinessEverydayHr = entity.trainingReadinessEverydayHr,
             vo2Max = entity.vo2Max,
             vo2MaxSource = entity.vo2MaxSource,
+            workoutRecommendation = WorkoutRecommendationCodec.decode(entity.workoutRecommendationJson),
         )
 
     private fun DailySummaryEntity.withBodyMetrics(domain: DailySummary): DailySummaryEntity =
@@ -208,5 +209,6 @@ object DailySummaryMapper {
             trainingReadinessEverydayHr = domain.trainingReadinessEverydayHr,
             vo2Max = domain.vo2Max,
             vo2MaxSource = domain.vo2MaxSource,
+            workoutRecommendationJson = domain.workoutRecommendation?.let { WorkoutRecommendationCodec.encode(it) },
         )
 }
