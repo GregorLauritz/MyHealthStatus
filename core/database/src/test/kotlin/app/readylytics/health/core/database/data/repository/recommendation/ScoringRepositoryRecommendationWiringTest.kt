@@ -12,6 +12,7 @@ import app.readylytics.health.core.database.data.repository.ScoringSeriesLoader
 import app.readylytics.health.core.databaseschema.data.local.dao.BloodPressureRecordDao
 import app.readylytics.health.core.databaseschema.data.local.dao.BodyFatRecordDao
 import app.readylytics.health.core.databaseschema.data.local.dao.BodyTemperatureRecordDao
+import app.readylytics.health.core.databaseschema.data.local.entity.DailySummaryEntity
 import app.readylytics.health.core.databaseschema.data.local.dao.DailySummaryDao
 import app.readylytics.health.core.databaseschema.data.local.dao.HeartRateDao
 import app.readylytics.health.core.databaseschema.data.local.dao.MinuteBucketDao
@@ -53,6 +54,7 @@ import app.readylytics.health.core.scoring.domain.scoring.ScoringConfigFactory
 import app.readylytics.health.core.scoring.domain.scoring.sleep.CurrentNightHrvResolver
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.slot
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -224,7 +226,7 @@ class ScoringRepositoryRecommendationWiringTest {
             // The session the stale previous snapshot names: far from the habitual wake (03:00), so
             // it only wins if `previous` is actually honored.
             val retainedSession = sleepData(id = "retained-session", endMs = endOfDayMs(today, 3, zoneId))
-            coEvery { recommendationSleepSessionRepository.getSince(any()) } returns
+            coEvery { recommendationSleepSessionRepository.getInRange(any(), any()) } returns
                 (priorNights + listOf(habitualMatchSession, retainedSession))
 
             val staleSnapshot =
@@ -256,7 +258,7 @@ class ScoringRepositoryRecommendationWiringTest {
     fun `computeDailySummary populates workoutRecommendation via the wired assembler`() =
         runTest {
             val repo = createRepo(createRecommendationDependencies())
-            coEvery { recommendationSleepSessionRepository.getSince(any()) } returns emptyList()
+            coEvery { recommendationSleepSessionRepository.getInRange(any(), any()) } returns emptyList()
 
             val result = repo.computeDailySummary(LocalDate.now())
 
@@ -291,7 +293,7 @@ class ScoringRepositoryRecommendationWiringTest {
             val repo = createRepo(createRecommendationDependencies())
             // No session ends today, so the fresh assembly resolves to NO_SLEEP with no examples --
             // a shape the assembler could never reach by merging fields from the stale snapshot.
-            coEvery { recommendationSleepSessionRepository.getSince(any()) } returns emptyList()
+            coEvery { recommendationSleepSessionRepository.getInRange(any(), any()) } returns emptyList()
 
             val result = repo.computeDailySummary(today)
 
@@ -304,7 +306,7 @@ class ScoringRepositoryRecommendationWiringTest {
     fun `computeDailySummary produces identical workoutRecommendation JSON for repeated identical inputs`() =
         runTest {
             val repo = createRepo(createRecommendationDependencies())
-            coEvery { recommendationSleepSessionRepository.getSince(any()) } returns emptyList()
+            coEvery { recommendationSleepSessionRepository.getInRange(any(), any()) } returns emptyList()
 
             val first = repo.computeDailySummary(LocalDate.now())
             val second = repo.computeDailySummary(LocalDate.now())
@@ -319,13 +321,66 @@ class ScoringRepositoryRecommendationWiringTest {
     fun `computeAndPersistDailySummary does not upsert when recommendation assembly fails`() =
         runTest {
             val repo = createRepo(createRecommendationDependencies())
-            coEvery { recommendationSleepSessionRepository.getSince(any()) } throws IllegalStateException("boom")
+            coEvery { recommendationSleepSessionRepository.getInRange(any(), any()) } throws
+                IllegalStateException("boom")
 
             assertFailsWith<IllegalStateException> {
                 repo.computeAndPersistDailySummary(LocalDate.now())
             }
 
             coVerify(exactly = 0) { dailySummaryDao.upsert(any()) }
+        }
+
+    @Test
+    fun `computeAndPersistDailySummary still persists the day when the sleep-metrics pass fails`() =
+        runTest {
+            // Regression guard for the scoring-version 4->5 backfill: this pass used to throw, which
+            // aborted the whole day's scoring. One deterministically-failing historical day then
+            // failed every retained-history recompute -- Result.retry(), no version bump, and the
+            // startup gate re-enqueued the same doomed pass on every launch, forever.
+            val today = LocalDate.now()
+            val zoneId = ZoneId.systemDefault()
+            val session = sleepData(id = "morning", endMs = endOfDayMs(today, 7, zoneId))
+            coEvery { recommendationSleepSessionRepository.getInRange(any(), any()) } returns listOf(session)
+            coEvery { recommendationComputeSleepMetricsUseCase(any()) } returns
+                Result.failure("boom", "SLEEP_METRICS_ERROR")
+            val repo = createRepo(createRecommendationDependencies())
+
+            repo.computeAndPersistDailySummary(today)
+
+            val persisted = slot<DailySummaryEntity>()
+            coVerify(exactly = 1) { dailySummaryDao.upsert(capture(persisted)) }
+            assertNull(persisted.captured.workoutRecommendationJson)
+        }
+
+    @Test
+    fun `a failed sleep-metrics pass leaves an already-computed snapshot for the day intact`() =
+        runTest {
+            // The counterpart to the guard above: degrading to "no snapshot" must not *erase*
+            // guidance a previous run already produced, or a transient failure would look like the
+            // day was never computed and re-arm the restore-coverage backfill.
+            val today = LocalDate.now()
+            val zoneId = ZoneId.systemDefault()
+            val todayMs = today.atStartOfDay(zoneId).toInstant().toEpochMilli()
+            val session = sleepData(id = "morning", endMs = endOfDayMs(today, 7, zoneId))
+            val stored =
+                WorkoutRecommendationSnapshot(
+                    wakeSessionId = "morning",
+                    wakeTimeMs = session.endTime,
+                    decision =
+                        WorkoutRecommendationDecision(
+                            WorkoutRecommendationState.HARDER,
+                            listOf(WorkoutRecommendationReason.WITHIN_USUAL_RANGE),
+                        ),
+                )
+            coEvery { scoringHistoryRepository.getDailySummaryByDate(todayMs, zoneId) } returns
+                DailySummary(date = today, workoutRecommendation = stored)
+            coEvery { recommendationSleepSessionRepository.getInRange(any(), any()) } returns listOf(session)
+            coEvery { recommendationComputeSleepMetricsUseCase(any()) } returns
+                Result.failure("boom", "SLEEP_METRICS_ERROR")
+            val repo = createRepo(createRecommendationDependencies())
+
+            assertEquals(stored, repo.computeDailySummary(today).workoutRecommendation)
         }
 
     private fun endOfDayMs(

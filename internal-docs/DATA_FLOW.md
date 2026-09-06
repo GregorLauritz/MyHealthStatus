@@ -902,10 +902,19 @@ a pre-v19-schema backup carries no `workoutRecommendationJson` column at all. In
 `RestoreRecommendationCoverageChecker` inspects the restored `daily_summaries` rows directly, bounded
 to *retained* rows (`RetentionBounds.resolveRetentionCutoffMs`, reading whatever preferences are in
 effect at check time) — a row already outside retention can never be repaired by the retention-bounded
-recompute this schedules anyway, so it must never be why a restore triggers one. If any retained row's
-`workoutRecommendationJson` is absent or fails `WorkoutRecommendationCodec.decode` (unrecognized
-`ruleVersion` or invariant violation), it enqueues the same `scheduleResyncWorker(recomputeOnly =
-true)` full-retention recompute used by the ordinary version-gate. This runs **after** preferences
+recompute this schedules anyway, so it must never be why a restore triggers one. If **no** retained row
+carries a payload that survives `WorkoutRecommendationCodec.decode` (all absent, or all rejected for an
+unrecognized `ruleVersion`/invariant violation) — i.e. the restored database predates the feature
+entirely — it enqueues the same `scheduleResyncWorker(recomputeOnly = true)` full-retention recompute
+used by the ordinary version-gate. The test is deliberately "none covered", not "any row uncovered":
+a single uncovered day is not evidence a backup predates the feature, and it is not necessarily
+repairable — a day whose morning sleep-metrics pass fails legitimately stores no snapshot (§2.11.2),
+deterministically, for the same stored rows — so an "any" test would re-schedule a full recompute on
+*every* restore of that database, forever, for a day whose answer can never change. The narrower test
+costs only the partially-covered-restore case, and that still converges: a partially covered database
+was left behind by an interrupted backfill, so its `scoringVersion` is still stale and
+`DatabaseReadyStartupInitializer`'s version gate re-enqueues the same recompute on the next launch.
+This runs **after** preferences
 restore succeeds (or from the failure branch, if preferences restore itself fails) — never before —
 so the retention-bounded check reads the just-restored preferences (scoring zone, retention window)
 rather than risking the worker starting against a pre-restore configuration mid-write. This is a
@@ -1464,6 +1473,22 @@ narrowed `SleepMetricsRequest`:
 - `forceLiveBaselines = true`, which keeps the pass on live, `dayEndMs`-bounded windows even after the day's
   baseline has been frozen (below).
 
+**Failure degrades to no snapshot, never to a failed day.** If that `ComputeSleepMetricsUseCase` pass
+returns a failure, `MorningRecoveryLoader` logs it at WARN and returns `null`; `assemble` returns
+`null`; and `ScoringRepositoryImpl` keeps whatever snapshot was already stored for the day
+(`context.dailySummary?.workoutRecommendation`, so a transient failure never *erases* guidance a
+previous run computed), leaving `workoutRecommendation` `null` for a day that never had one. The
+day's own scores are unaffected and still persist. This must not throw: the recommendation is
+assembled *after* the readiness pipeline has produced a complete summary, and throwing would abort
+`computeAndPersistDailySummary` — which during the version 4→5 backfill means one
+deterministically-failing historical day fails the whole retained-history recompute
+(`Result.retry()`, no version bump), and `DatabaseReadyStartupInitializer` re-enqueues the same
+doomed pass on every launch indefinitely. `null` is the existing "no snapshot for this day" value; a
+computation failure is deliberately *not* dressed up as one of the unavailable
+`WorkoutRecommendationState` values, which are user-facing explanations of missing *data*.
+`ComputeSleepMetricsUseCase` rethrows `CancellationException` before it can become a failure result,
+so cancellation still propagates.
+
 **Why the freeze is bypassed here.** Ordinary scoring reads a day's frozen baseline snapshot
 (`hrvMuMssd`/`hrvSigmaMssd`/`rhrBpm`/`rhrSigma`) once `AssembleDailySummaryUseCase` stamps
 `baselineCalculatedAtDate`, and `BaselineComputer`'s `*Between` methods refuse to recompute a frozen day at
@@ -1506,7 +1531,18 @@ Only `EASY` and `HARDER` decisions load examples. The window is `wakeTime − 30
 `wakeTime`. `WorkoutExampleLoader` narrows candidate rows first (duration > 15 min, non-blank
 exercise type, fully inside the window), fetches the 42-day summary history once per window rather
 than per workout, and memoizes `GetWorkoutDisplayMetricsUseCase.execute` per (workout id,
-preferences) so a historical replay does not re-run it for repeated ids. `finalLoad` is that use
+preferences) so a historical replay does not re-run it for repeated ids.
+
+Both of the assembly's history reads are **bounded at both ends**, via
+`SleepSessionRepository.getInRange`/`DailySummaryRepository.getInRange` (the bounded counterparts of
+`getSince`, matching `WorkoutRepository.getInRange`'s existing shape). The unbounded `getSince` reads
+they replaced returned every row through *today*, so replaying N retained days cost O(N²) row
+materializations — plus, for summaries, a `UserPreferences` read and a `WorkoutRecommendationCodec`
+JSON decode per row — for windows only ~60 and ~42 days wide. The sleep window is
+`[dayEnd − CIRCADIAN_CONSISTENCY_WINDOW_DAYS, dayEnd]` (every consumer already discarded anything
+ending after the day); the summary window ends at the newest candidate workout's local midnight
+(`GetWorkoutDisplayMetricsUseCase` evaluates its ATL/CTL EMA *at* each workout's own date, and this
+loader consumes only `classification.finalLoad`, which does not read the summary history at all). `finalLoad` is that use
 case's canonical `classification.finalLoad` — not a re-derived score — so an example reads exactly
 as the workout does elsewhere; rows with no classification are dropped, and a non-finite or
 non-positive average HR is omitted rather than reported as zero.
@@ -1545,7 +1581,10 @@ degrades to a measured approximation, not a bit-identical replay, once retention
 `ScoringRepositoryImpl.computeDailySummary` calls `MorningRecommendationAssembler.assemble` last —
 after the daily TRIMP/RAS pass and `FinalSummaryAssembler.assemble` have produced `finalSummary` —
 and returns `finalSummary.copy(workoutRecommendation = assembler.assemble(context, previous =
-context.dailySummary?.workoutRecommendation))`. It never recurses back into `computeDailySummary`.
+context.dailySummary?.workoutRecommendation) ?: previous)` — the `?: previous` fallback keeps an
+already-stored snapshot when this day's assembly degrades to `null` (§2.11.2), the same "no fresh
+value means keep the stored one" rule `withStepCount` applies to step counts. It never recurses back
+into `computeDailySummary`.
 `context.dailySummary` is the row already loaded for this exact day by
 `ScoringDayContextResolver.resolveScoringDayContext` (`scoringHistoryRepository.getDailySummaryByDate`),
 so `previous` is always the snapshot actually stored for that day, not a stale or cross-day value; it
@@ -1586,9 +1625,11 @@ than coercing it into a decision — a corrupt or future-version row must read b
 yet," never as a guessed `HARDER`. `DailySummaryMapper` calls the codec both ways (`toDomain`/
 `toEntity`), so the recommendation travels through the same single upsert as every other computed
 field — one `dailySummaryDao.upsert(entity)` call commits category, reasons, and examples together;
-there is no separate examples table. Because assembly runs and can throw *before* that
-`persist`/`computeAndPersistDailySummary` call, a failed assembly aborts the whole day's write and
-leaves the prior persisted row untouched rather than partially overwriting it.
+there is no separate examples table. A *computation* failure inside assembly (a failed sleep-metrics
+pass) degrades to no snapshot and the day still writes normally — see §2.11.2. An *operational*
+failure that throws (a Room read failing outright, say) still propagates: assembly runs before the
+`persist`/`computeAndPersistDailySummary` call, so the whole day's write is aborted and the prior
+persisted row is left untouched rather than partially overwritten.
 
 `daily_summaries.workoutRecommendationJson` is additive/nullable (schema v19, above); a `null` value
 means "not calculated yet" — including every row from before this column existed — and is presentation-
@@ -1599,10 +1640,16 @@ layer.
 **Resync cost (accepted, not yet optimized).** `DailyRecomputeSupport.recomputeDay` →
 `computeAndPersistDailySummary` runs recommendation assembly on *every* day of a full historical
 resync, exactly as it does for the daily-sync path -- there is no walk-forward fast path for it. Per
-day this adds: a `getSince` sleep-history query, a full sleep-metrics pass with
+day this adds: a bounded `getInRange` sleep-history query (~60 days — it was an unbounded `getSince`,
+which made this cost quadratic in retained history rather than per-day constant; see §2.11.3), a full sleep-metrics pass with
 `forceLiveBaselines = true` (bypassing the frozen-baseline short-circuit ordinary scoring uses once a
 day is frozen), a `CalibrationGate` evaluation, a residual-fatigue evaluation, and — for any day whose
-decision lands on EASY/HARDER — a 30-day workout-example load. None of this is shared across days the
+decision lands on EASY/HARDER — a 30-day workout-example load plus its bounded 42-day summary read
+(also formerly an unbounded `getSince`, and the worse of the two: `DailySummaryRepositoryImpl.getSince`
+reads preferences and maps every returned row through `DailySummaryMapper`, JSON decode included, so
+the waste compounded as the backfill populated the very rows it was redundantly re-fetching). Both
+reads are now O(window) rather than O(remaining history), making this cost genuinely per-day constant.
+None of this is shared across days the
 way `WalkForwardTrimpContext`/`WalkForwardBaselineContext`/`WalkForwardFatigueContext`/
 `WalkForwardVo2MaxContext` amortize the rest of the pipeline (PERF-002/WP-20/WP-22/WP-27). This is an
 accepted cost for this task, not an oversight: batching or otherwise amortizing recommendation

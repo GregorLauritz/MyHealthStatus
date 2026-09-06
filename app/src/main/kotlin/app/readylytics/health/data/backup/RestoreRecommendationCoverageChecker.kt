@@ -22,6 +22,16 @@ import javax.inject.Singleton
  * (e.g. it predates a rule-version bump the restored `scoringVersion` doesn't reflect). This is a
  * genuine "is the data there" check, not a "does the label claim it's there" check.
  *
+ * The test is *no* retained row carries a payload, i.e. the restored database predates the feature
+ * entirely -- deliberately not "some row is missing one". A per-row test cannot distinguish "never
+ * computed" from "computed and legitimately produced nothing" (a day whose morning sleep-metrics
+ * pass fails always will, for the same stored data), so it would make every restore of such a
+ * database schedule another full recompute that can never change the outcome. The narrower test
+ * costs only the partially-covered-restore case, and that one still converges: a partially covered
+ * database was left behind by an interrupted backfill, so its `scoringVersion` is still stale and
+ * [app.readylytics.health.DatabaseReadyStartupInitializer]'s version gate re-enqueues the same
+ * recompute on the next launch.
+ *
  * Bounded to *retained* rows (per the brief's "retained-summary coverage checks"): a row outside
  * `RetentionBounds.resolveRetentionCutoffMs` can never be repaired by the retention-bounded
  * recompute this schedules anyway, so it must never be the reason a restore triggers one. Reads
@@ -50,10 +60,17 @@ class RestoreRecommendationCoverageChecker
                 val summaries =
                     retentionCutoffMs?.let { healthDatabase.dailySummaryDao().getSince(it) }
                         ?: healthDatabase.dailySummaryDao().getAllSummaries()
-                val incomplete =
+                // "None of the retained rows carry a payload", not "any row is missing one". A
+                // single missing day is not evidence the backup predates the feature, and it is not
+                // repairable: `MorningRecommendationAssembler` legitimately yields no snapshot for a
+                // day whose morning sleep-metrics pass fails (see `MorningRecoveryLoader`), and that
+                // failure is deterministic for the same stored data. Under an "any" test such a day
+                // would make every future restore of this database schedule another full
+                // recompute-only pass that can never change the answer.
+                val uncovered =
                     summaries.isNotEmpty() &&
-                        summaries.any { WorkoutRecommendationCodec.decode(it.workoutRecommendationJson) == null }
-                if (incomplete) {
+                        summaries.none { WorkoutRecommendationCodec.decode(it.workoutRecommendationJson) != null }
+                if (uncovered) {
                     workerScheduler.scheduleResyncWorker(recomputeOnly = true)
                 }
             } catch (e: CancellationException) {

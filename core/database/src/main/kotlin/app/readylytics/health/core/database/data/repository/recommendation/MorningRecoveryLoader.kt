@@ -4,12 +4,13 @@ import app.readylytics.health.core.database.data.repository.CalibrationGate
 import app.readylytics.health.core.database.data.repository.ResidualFatigueComputer
 import app.readylytics.health.core.database.data.repository.ScoringDayContext
 import app.readylytics.health.core.model.domain.model.DailySummary
+import app.readylytics.health.core.model.domain.model.Result
 import app.readylytics.health.core.model.domain.model.SleepSession
-import app.readylytics.health.core.model.domain.model.getOrElse
 import app.readylytics.health.core.model.domain.preferences.PhysiologyProfile
 import app.readylytics.health.core.model.domain.repository.SleepSessionData
 import app.readylytics.health.core.model.domain.repository.SleepSessionRepository
 import app.readylytics.health.core.model.domain.scoring.ScoringConstants
+import app.readylytics.health.core.model.domain.util.logW
 import app.readylytics.health.core.scoring.domain.recommendation.WorkoutRecommendationInput
 import app.readylytics.health.core.scoring.domain.scoring.BaselineComputer
 import app.readylytics.health.core.scoring.domain.scoring.CircadianWakeBaseline
@@ -28,6 +29,22 @@ internal const val CIRCADIAN_HISTORY_WINDOW_MS =
     ScoringConstants.CIRCADIAN_CONSISTENCY_WINDOW_DAYS.toLong() * 24L * 60L * 60L * 1000L
 
 private const val MILLIS_PER_DAY = 86_400_000L
+
+/**
+ * The sleep history the morning assembly needs for one day: everything starting within
+ * [CIRCADIAN_HISTORY_WINDOW_MS] of the day's end, and ending by that same instant.
+ *
+ * Bounded on purpose. `getSince` has no upper bound, so replaying a day from years ago during a
+ * historical backfill would materialize every sleep row from the window start through *today* --
+ * quadratic in retained history for a window that is only ever ~60 days wide. Every consumer
+ * downstream already discards anything ending after the day (`endTime <= wakeTimeMs`, or an
+ * end-of-day local-date match), so the upper bound removes only rows that were being thrown away.
+ */
+internal suspend fun SleepSessionRepository.loadCircadianHistory(context: ScoringDayContext): List<SleepSessionData> =
+    getInRange(
+        fromMs = context.nextDayMidnightMs - CIRCADIAN_HISTORY_WINDOW_MS,
+        toMs = context.nextDayMidnightMs,
+    )
 
 /** Domain view of a stored sleep row, for the scoring pass that only speaks [SleepSession]. */
 internal fun SleepSessionData.toDomainSession(): SleepSession =
@@ -57,6 +74,9 @@ internal fun SleepSessionData.toDomainSession(): SleepSession =
  * *same* [ComputeSleepMetricsUseCase] with the same formulas — only its request bounds differ (see
  * [SleepMetricsRequest]).
  */
+// Hilt-annotated for a future direct binding, but currently constructed by hand in
+// `ScoringRepositoryImpl` (from `MorningRecommendationDependencies`) rather than injected --
+// the graph has no binding for this type today.
 @Singleton
 class MorningRecoveryLoader
     @Inject
@@ -72,16 +92,21 @@ class MorningRecoveryLoader
         /**
          * [sessions] is the caller's already-loaded sleep history covering at least
          * [CIRCADIAN_HISTORY_WINDOW_MS] before the day; it is re-derived from Room when absent.
+         *
+         * Returns `null` when the morning sleep-metrics pass could not be computed for this day —
+         * see [computeMorningSleepMetrics]. The caller must degrade rather than substitute a
+         * fabricated input: an unavailable *state* would be a false explanation for what is really
+         * a computation failure.
          */
         suspend fun load(
             context: ScoringDayContext,
             session: SleepSession,
             sessions: List<SleepSessionData>? = null,
-        ): WorkoutRecommendationInput {
+        ): WorkoutRecommendationInput? {
             val prefs = context.prefs
             val wakeTimeMs = session.endTime
             val history =
-                sessions ?: sleepSessionRepository.getSince(context.nextDayMidnightMs - CIRCADIAN_HISTORY_WINDOW_MS)
+                sessions ?: sleepSessionRepository.loadCircadianHistory(context)
 
             // The habitual wake time must come from days that are already over, so the day being
             // scored cannot define its own "usual".
@@ -90,7 +115,7 @@ class MorningRecoveryLoader
                 CircadianWakeBaseline.resolve(priorHistory, prefs.consistencyBaselineDays, context.zoneId) != null
 
             val boundedSessions = history.filter { it.endTime <= wakeTimeMs }.map { it.toDomainSession() }
-            val morningSummary = computeMorningSleepMetrics(context, session, boundedSessions)
+            val morningSummary = computeMorningSleepMetrics(context, session, boundedSessions) ?: return null
             val hrv = hrvResolver.resolve(session, setOf(session.id))
             val thresholds = emergencyThresholds(context)
             // `ComputeSleepMetricsUseCase` never stamps `isCalibrating` on the summary it returns
@@ -119,11 +144,26 @@ class MorningRecoveryLoader
             )
         }
 
+        /**
+         * `null` when the pass failed.
+         *
+         * A failure here is an operational failure of *this day's recommendation*, never a reason to
+         * abandon the day's scoring: the recommendation is assembled after the readiness pipeline has
+         * already produced a complete [DailySummary], and `ScoringRepositoryImpl` persists that
+         * summary. Throwing instead would abort `computeAndPersistDailySummary`, which during the
+         * scoring-version 4->5 backfill means one deterministically-failing historical day fails the
+         * whole retained-history recompute pass -- `Result.retry()`, no version bump, and the startup
+         * gate re-enqueues the same doomed pass on every launch forever.
+         *
+         * [ComputeSleepMetricsUseCase] already rethrows `CancellationException` and logs the cause at
+         * ERROR before returning a failure, so cancellation still propagates and the underlying stack
+         * trace is not lost; this logs the degradation itself at WARN.
+         */
         private suspend fun computeMorningSleepMetrics(
             context: ScoringDayContext,
             session: SleepSession,
             boundedSessions: List<SleepSession>,
-        ): DailySummary {
+        ): DailySummary? {
             val wakeTimeMs = session.endTime
             val baseSummary = context.dailySummary ?: DailySummary(date = context.targetDate)
             val request =
@@ -145,10 +185,17 @@ class MorningRecoveryLoader
                     // next-day-midnight window; honouring them would make a day score differently
                     // once it froze. See `SleepMetricsRequest.forceLiveBaselines`.
                 )
-            // A failed pass is an operational failure, not "no recovery data": surfacing it lets the
-            // caller retry instead of persisting a fabricated unavailable state.
-            return computeSleepMetricsUseCase(request).getOrElse { failure ->
-                error("Morning sleep metrics failed for ${context.targetDate}: ${failure.code} ${failure.reason}")
+            // A failed pass is an operational failure, not "no recovery data" — so the day gets no
+            // snapshot at all rather than a fabricated unavailable state.
+            return when (val result = computeSleepMetricsUseCase(request)) {
+                is Result.Success -> result.data
+                is Result.Failure -> {
+                    logW(TAG) {
+                        "Morning sleep metrics failed for ${context.targetDate} " +
+                            "(${result.code} ${result.reason}); day scores without a recommendation"
+                    }
+                    null
+                }
             }
         }
 
@@ -198,5 +245,9 @@ class MorningRecoveryLoader
                     installDate = LocalDate.ofEpochDay(context.prefs.installDate / MILLIS_PER_DAY),
                     currentDate = context.targetDate,
                 ).emergencyFlags
+        }
+
+        private companion object {
+            const val TAG = "MorningRecoveryLoader"
         }
     }

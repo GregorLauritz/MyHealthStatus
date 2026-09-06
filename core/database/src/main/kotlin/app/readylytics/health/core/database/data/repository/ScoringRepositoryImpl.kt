@@ -269,15 +269,20 @@ class ScoringRepositoryImpl
 
 /**
  * Anchored to the wake time, entirely independent of the TRIMP/readiness pipeline that produced
- * [finalSummary]; a thrown exception here surfaces before `persist`/`computeAndPersistDailySummary`
- * ever calls `dataLoader.persistDailySummary`, so a failed assembly leaves the day's prior row
- * untouched rather than partially overwriting it. Never recurses back into `computeDailySummary`.
+ * [finalSummary]. Never recurses back into `computeDailySummary`.
+ *
+ * A day whose recovery inputs could not be computed yields a `null` assembly. That must not abort
+ * the day — the readiness pipeline has already produced a complete [finalSummary] and the day still
+ * scores and persists — and it must not *erase* guidance that a previous run already computed for
+ * this day, so the stored snapshot is preserved (the same "no fresh value means keep the stored one"
+ * rule `withStepCount` applies to step counts). A day that has never had one simply stays `null`.
  */
 private suspend fun MorningRecommendationAssembler.applyRecommendation(
     context: ScoringDayContext,
     finalSummary: DailySummary,
 ): DailySummary {
-    val recommendation = assemble(context, previous = context.dailySummary?.workoutRecommendation)
+    val previous = context.dailySummary?.workoutRecommendation
+    val recommendation = assemble(context, previous = previous) ?: previous
     return finalSummary.copy(workoutRecommendation = recommendation)
 }
 

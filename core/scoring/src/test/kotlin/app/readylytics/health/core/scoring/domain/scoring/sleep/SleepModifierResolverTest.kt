@@ -67,6 +67,11 @@ class SleepModifierResolverTest {
         val sessionRepo = object : SleepSessionRepository {
             override fun observeSince(fromMs: Long): Flow<List<SleepSessionData>> = emptyFlow()
             override suspend fun getSince(fromMs: Long): List<SleepSessionData> = emptyList()
+
+            override suspend fun getInRange(
+                fromMs: Long,
+                toMs: Long,
+            ): List<SleepSessionData> = emptyList()
             override suspend fun countSince(fromMs: Long): Int = 0
             override fun observeSessionStages(sessionId: String): Flow<List<SleepStageData>> = emptyFlow()
             override suspend fun getSessionStages(sessionId: String): List<SleepStageData> = stages
@@ -88,6 +93,11 @@ class SleepModifierResolverTest {
         val sessionRepo = object : SleepSessionRepository {
             override fun observeSince(fromMs: Long): Flow<List<SleepSessionData>> = emptyFlow()
             override suspend fun getSince(fromMs: Long): List<SleepSessionData> = emptyList()
+
+            override suspend fun getInRange(
+                fromMs: Long,
+                toMs: Long,
+            ): List<SleepSessionData> = emptyList()
             override suspend fun countSince(fromMs: Long): Int = 0
             override fun observeSessionStages(sessionId: String): Flow<List<SleepStageData>> = emptyFlow()
             override suspend fun getSessionStages(sessionId: String): List<SleepStageData> = stages
@@ -143,6 +153,11 @@ class SleepModifierResolverTest {
                 object : SleepSessionRepository {
                     override fun observeSince(fromMs: Long): Flow<List<SleepSessionData>> = emptyFlow()
                     override suspend fun getSince(fromMs: Long): List<SleepSessionData> = emptyList()
+
+            override suspend fun getInRange(
+                fromMs: Long,
+                toMs: Long,
+            ): List<SleepSessionData> = emptyList()
                     override suspend fun countSince(fromMs: Long): Int = 0
                     override fun observeSessionStages(sessionId: String): Flow<List<SleepStageData>> = emptyFlow()
                     override suspend fun getSessionStages(sessionId: String): List<SleepStageData> = emptyList()

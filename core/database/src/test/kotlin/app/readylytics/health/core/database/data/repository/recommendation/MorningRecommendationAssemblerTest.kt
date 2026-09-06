@@ -44,6 +44,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -263,7 +264,7 @@ class MorningRecommendationAssemblerTest {
             val to = secondArg<Long>()
             rows.filter { it.startTime >= from && it.endTime <= to }
         }
-        coEvery { dailySummaryRepository.getSince(any()) } returns emptyList()
+        coEvery { dailySummaryRepository.getInRange(any(), any()) } returns emptyList()
         coEvery { displayMetrics.execute(any(), any(), any(), any()) } answers {
             val w = firstArg<WorkoutData>()
             metricsFor(if (w.id == "run") WorkoutLoadLevel.MODERATE else WorkoutLoadLevel.HARD)
@@ -311,12 +312,21 @@ class MorningRecommendationAssemblerTest {
         )
     }
 
+    // Mirrors the bounded read the assembly now issues: the window ends at the day's end, so a
+    // record that runs past it is never even fetched.
     private fun stubSessions(sessions: List<SleepSessionData>) {
-        coEvery { sleepSessionRepository.getSince(any()) } answers {
+        coEvery { sleepSessionRepository.getInRange(any(), any()) } answers {
             val from = firstArg<Long>()
-            sessions.filter { it.endTime >= from }
+            val to = secondArg<Long>()
+            sessions.filter { it.endTime >= from && it.endTime <= to }
         }
     }
+
+    /** Every case that reaches this expects a snapshot; a null assembly is a failure, not a value. */
+    private suspend fun MorningRecommendationAssembler.assembleSnapshot(
+        context: ScoringDayContext,
+        previous: WorkoutRecommendationSnapshot? = null,
+    ): WorkoutRecommendationSnapshot = assertNotNull(assemble(context, previous), "expected a snapshot")
 
     // endregion
 
@@ -328,11 +338,11 @@ class MorningRecommendationAssemblerTest {
             stubWorkouts(listOf(runningWorkout, cyclingWorkout, eveningRow))
             stubFatigue(listOf(seedWorkout))
             stubSessions(priorNights + morningSession)
-            val morningOnly = assembler().assemble(context())
+            val morningOnly = assembler().assembleSnapshot(context())
 
             stubFatigue(listOf(seedWorkout, eveningWorkout))
             stubSessions(priorNights + morningSession + afternoonNap)
-            val endOfDay = assembler().assemble(context())
+            val endOfDay = assembler().assembleSnapshot(context())
 
             assertEquals(morningOnly, endOfDay)
             assertEquals(WorkoutRecommendationState.HARDER, morningOnly.decision.state)
@@ -350,7 +360,7 @@ class MorningRecommendationAssemblerTest {
             stubFatigue(listOf(seedWorkout, eveningWorkout))
             stubSessions(priorNights + morningSession + afternoonNap)
 
-            assembler().assemble(context())
+            assembler().assembleSnapshot(context())
 
             assertEquals(wakeMs, captured.captured.dayEndMs)
             assertEquals(setOf("main"), captured.captured.currentSessionIds)
@@ -365,14 +375,14 @@ class MorningRecommendationAssemblerTest {
             stubWorkouts(listOf(runningWorkout, cyclingWorkout, eveningRow))
             stubFatigue(listOf(seedWorkout))
             stubSessions(priorNights + morningSession)
-            val live = assembler().assemble(context())
+            val live = assembler().assembleSnapshot(context())
 
             // Replay months later: the whole day, and everything after it, is now on disk.
             stubFatigue(listOf(seedWorkout, eveningWorkout))
             stubSessions(priorNights + morningSession + afternoonNap)
             val replayed = assembler()
-            assertEquals(live, replayed.assemble(context()))
-            assertEquals(live, replayed.assemble(context()))
+            assertEquals(live, replayed.assembleSnapshot(context()))
+            assertEquals(live, replayed.assembleSnapshot(context()))
         }
 
     @Test
@@ -384,7 +394,7 @@ class MorningRecommendationAssemblerTest {
             stubFatigue(listOf(seedWorkout))
             stubSessions(priorNights + morningSession)
 
-            val snapshot = assembler().assemble(context())
+            val snapshot = assembler().assembleSnapshot(context())
 
             assertEquals(listOf("bike"), snapshot.examples.map { it.workoutId })
             assertNull(snapshot.examples.single().averageHr)
@@ -399,7 +409,7 @@ class MorningRecommendationAssemblerTest {
             stubFatigue(listOf(seedWorkout))
             stubSessions(priorNights + morningSession)
 
-            val snapshot = assembler().assemble(context())
+            val snapshot = assembler().assembleSnapshot(context())
 
             assertEquals(listOf("bike", "run"), snapshot.examples.map { it.workoutId })
             assertEquals(140f, snapshot.examples.first().averageHr)
@@ -414,9 +424,9 @@ class MorningRecommendationAssemblerTest {
             stubSessions(priorNights + morningSession)
 
             stubSleepMetrics(zLnHrv = 0.1f)
-            val healthy = assembler().assemble(context())
+            val healthy = assembler().assembleSnapshot(context())
             stubSleepMetrics(zLnHrv = -2.4f)
-            val suppressed = assembler().assemble(context())
+            val suppressed = assembler().assembleSnapshot(context())
 
             assertEquals(WorkoutRecommendationState.HARDER, healthy.decision.state)
             assertEquals(WorkoutRecommendationState.EASY, suppressed.decision.state)
@@ -433,7 +443,7 @@ class MorningRecommendationAssemblerTest {
             stubFatigue(listOf(seedWorkout))
             stubSessions(priorNights + morningSession)
 
-            val snapshot = assembler().assemble(context())
+            val snapshot = assembler().assembleSnapshot(context())
 
             assertEquals(WorkoutRecommendationState.REST, snapshot.decision.state)
             assertTrue(snapshot.examples.isEmpty())
@@ -448,7 +458,7 @@ class MorningRecommendationAssemblerTest {
             stubFatigue(listOf(seedWorkout))
             stubSessions(priorNights)
 
-            val snapshot = assembler().assemble(context())
+            val snapshot = assembler().assembleSnapshot(context())
 
             assertEquals(WorkoutRecommendationState.NO_SLEEP, snapshot.decision.state)
             assertNull(snapshot.wakeSessionId)
@@ -466,7 +476,7 @@ class MorningRecommendationAssemblerTest {
 
             assertEquals(
                 WorkoutRecommendationState.NO_HRV,
-                assembler().assemble(context()).decision.state,
+                assembler().assembleSnapshot(context()).decision.state,
             )
         }
 
@@ -483,7 +493,7 @@ class MorningRecommendationAssemblerTest {
 
             assertEquals(
                 WorkoutRecommendationState.CALIBRATING,
-                assembler().assemble(context()).decision.state,
+                assembler().assembleSnapshot(context()).decision.state,
             )
         }
 
@@ -496,7 +506,7 @@ class MorningRecommendationAssemblerTest {
             stubFatigue(listOf(seedWorkout))
             stubSessions(priorNights.take(2) + morningSession)
 
-            val snapshot = assembler().assemble(context())
+            val snapshot = assembler().assembleSnapshot(context())
 
             assertEquals(WorkoutRecommendationState.NO_CIRCADIAN_BASELINE, snapshot.decision.state)
             assertEquals("main", snapshot.wakeSessionId)
@@ -515,7 +525,7 @@ class MorningRecommendationAssemblerTest {
 
             assertEquals(
                 WorkoutRecommendationState.NO_CIRCADIAN_BASELINE,
-                assembler().assemble(context()).decision.state,
+                assembler().assembleSnapshot(context()).decision.state,
             )
         }
 
@@ -528,7 +538,7 @@ class MorningRecommendationAssemblerTest {
             stubFatigue(emptyList(), unbackfilled = 1)
             stubSessions(priorNights + morningSession)
 
-            val snapshot = assembler().assemble(context())
+            val snapshot = assembler().assembleSnapshot(context())
 
             assertEquals(WorkoutRecommendationState.EASY, snapshot.decision.state)
             assertEquals(
@@ -549,7 +559,7 @@ class MorningRecommendationAssemblerTest {
             stubFatigue(listOf(seedWorkout), unbackfilled = 1)
             stubSessions(priorNights + morningSession)
 
-            val snapshot = assembler().assemble(context())
+            val snapshot = assembler().assembleSnapshot(context())
 
             assertEquals(WorkoutRecommendationState.EASY, snapshot.decision.state)
             assertEquals(listOf(WorkoutRecommendationReason.FATIGUE_MISSING), snapshot.decision.reasons)
@@ -573,7 +583,7 @@ class MorningRecommendationAssemblerTest {
                     wakeTimeMs = wakeMs,
                     decision = WorkoutRecommendationDecision(WorkoutRecommendationState.HARDER),
                 )
-            val snapshot = assembler().assemble(context(), previous)
+            val snapshot = assembler().assembleSnapshot(context(), previous)
 
             assertEquals("main", snapshot.wakeSessionId)
             assertEquals(correctedWake, snapshot.wakeTimeMs)
@@ -594,7 +604,7 @@ class MorningRecommendationAssemblerTest {
                     wakeTimeMs = wakeMs - HOUR_MS,
                     decision = WorkoutRecommendationDecision(WorkoutRecommendationState.HARDER),
                 )
-            val snapshot = assembler().assemble(context(), previous)
+            val snapshot = assembler().assembleSnapshot(context(), previous)
 
             assertEquals("main", snapshot.wakeSessionId)
             assertEquals(wakeMs, snapshot.wakeTimeMs)
@@ -610,7 +620,7 @@ class MorningRecommendationAssemblerTest {
             stubFatigue(listOf(seedWorkout))
             stubSessions(priorNights + morningSession + afternoonNap)
 
-            assembler().assemble(context())
+            assembler().assembleSnapshot(context())
 
             // 55f is ScoringDayContext.initialBaselines.rhrBaselineValue, computed over the whole
             // day; forwarding it would let the 14:00 nap move zRhr and with it ILLNESS_ONSET.
@@ -627,12 +637,12 @@ class MorningRecommendationAssemblerTest {
             stubFatigue(listOf(seedWorkout))
 
             stubSessions(priorNights + morningSession)
-            val morningOnly = assembler().assemble(context())
+            val morningOnly = assembler().assembleSnapshot(context())
 
             // A long afternoon sleep with its own HR data: if the RHR baseline window still ran to
             // next-day midnight it would absorb this record.
             stubSessions(priorNights + morningSession + afternoonNap)
-            val withLaterRecord = assembler().assemble(context())
+            val withLaterRecord = assembler().assembleSnapshot(context())
 
             assertEquals(morningOnly, withLaterRecord)
             assertEquals(WorkoutRecommendationState.HARDER, morningOnly.decision.state)
@@ -649,7 +659,7 @@ class MorningRecommendationAssemblerTest {
             stubSessions(priorNights + morningSession)
 
             // First assembly of the day: nothing frozen yet, baselines resolved live.
-            val beforeFreeze = assembler().assemble(context())
+            val beforeFreeze = assembler().assembleSnapshot(context())
 
             // Every later assembly: the daily pipeline has since stamped baselineCalculatedAtDate,
             // whose snapshot was bounded at next-day midnight rather than at wake.
@@ -663,7 +673,7 @@ class MorningRecommendationAssemblerTest {
                     rhrSigma = 2f,
                     snapshotProfile = prefs.physiologyProfile.name,
                 )
-            val afterFreeze = assembler().assemble(context(frozen))
+            val afterFreeze = assembler().assembleSnapshot(context(frozen))
 
             assertEquals(beforeFreeze, afterFreeze)
             assertEquals(WorkoutRecommendationState.HARDER, beforeFreeze.decision.state)
@@ -682,13 +692,13 @@ class MorningRecommendationAssemblerTest {
             // Day 1: no prior history, so no circadian baseline. Selection degenerates to the
             // earliest end time, which is the 03:00 segment rather than the real morning wake.
             stubSessions(listOf(earlySegment, morningSession))
-            val degraded = assembler().assemble(context())
+            val degraded = assembler().assembleSnapshot(context())
             assertEquals(WorkoutRecommendationState.NO_CIRCADIAN_BASELINE, degraded.decision.state)
             assertEquals("early", degraded.wakeSessionId)
 
             // Backfill later supplies the prior nights, so a baseline now resolves for the same day.
             stubSessions(priorNights + earlySegment + morningSession)
-            val recovered = assembler().assemble(context(), degraded)
+            val recovered = assembler().assembleSnapshot(context(), degraded)
 
             assertEquals(WorkoutRecommendationState.HARDER, recovered.decision.state)
             assertEquals("main", recovered.wakeSessionId)
@@ -698,7 +708,7 @@ class MorningRecommendationAssemblerTest {
     @Test
     fun `an operational read failure propagates instead of reporting no data`() =
         runTest {
-            coEvery { sleepSessionRepository.getSince(any()) } throws IllegalStateException("db closed")
+            coEvery { sleepSessionRepository.getInRange(any(), any()) } throws IllegalStateException("db closed")
 
             assertFailsWith<IllegalStateException> { assembler().assemble(context()) }
         }
@@ -717,7 +727,7 @@ class MorningRecommendationAssemblerTest {
         }
 
     @Test
-    fun `a failed sleep-metrics pass propagates for retry rather than degrading silently`() =
+    fun `a failed sleep-metrics pass yields no snapshot instead of aborting the day`() =
         runTest {
             stubHrv()
             stubWorkouts(emptyList())
@@ -726,7 +736,10 @@ class MorningRecommendationAssemblerTest {
             stubBaselines()
             coEvery { computeSleepMetrics(any()) } returns Result.failure("boom", "SLEEP_METRICS_ERROR")
 
-            assertFailsWith<IllegalStateException> { assembler().assemble(context()) }
+            // Not an exception: throwing here would abort the whole day's scoring, and during the
+            // scoring-version 4->5 backfill one deterministically-failing day would fail every
+            // retained-history recompute pass forever.
+            assertNull(assembler().assemble(context()))
         }
 
     private companion object {

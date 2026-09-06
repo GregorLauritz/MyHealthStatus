@@ -91,6 +91,47 @@ class LocalRestoreRecommendationCoverageTest : LocalRestoreManagerTestBase() {
         }
 
     @Test
+    fun applyRestore_partiallyCoveredSummariesDoNotScheduleRecompute() =
+        runTest {
+            // Final-review fix (Finding 2): a *single* day without a payload is not evidence the
+            // backup predates the feature, and it is not necessarily repairable -- a day whose
+            // morning sleep-metrics pass fails legitimately yields no snapshot, deterministically,
+            // for the same stored data. Under an "any row is missing one" test, restoring this
+            // database would schedule another full recompute-only pass every single time, forever,
+            // for a day whose answer can never change.
+            val json = createValidBackupJson()
+            val snapshot =
+                WorkoutRecommendationSnapshot(
+                    wakeSessionId = null,
+                    wakeTimeMs = null,
+                    decision = WorkoutRecommendationDecision(state = WorkoutRecommendationState.REST),
+                )
+            val summariesJson =
+                JSONArray().apply {
+                    put(
+                        JSONObject().apply {
+                            put("dateMidnightMs", 1779926400000L)
+                            put("workoutRecommendationJson", WorkoutRecommendationCodec.encode(snapshot))
+                        },
+                    )
+                    put(
+                        JSONObject().apply {
+                            put("dateMidnightMs", 1780012800000L)
+                            put("sleepScore", 80.0)
+                        },
+                    )
+                }
+            json.put("dailySummaries", summariesJson)
+            val zipFile = createBackupZipFile("partially_covered_backup.zip", json)
+
+            val result = manager.applyRestore(Uri.fromFile(zipFile))
+
+            assertTrue(result is RestoreResult.SuccessRequiresRestart)
+            verify(exactly = 0) { workerScheduler.scheduleResyncWorker(recomputeOnly = true) }
+            zipFile.delete()
+        }
+
+    @Test
     fun applyRestore_emptyDailySummariesRestoresSuccessfullyWithoutSchedulingRecompute() =
         runTest {
             // No "dailySummaries" content at all -- the oldest possible backup shape, predating

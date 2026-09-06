@@ -24,6 +24,13 @@ object ResidualFatigueThresholds {
      * A null, non-finite, or negative [value] is unknown, not zero, so it returns [MetricStatus.NO_DATA]
      * rather than being coerced into [MetricStatus.OPTIMAL]. Likewise a non-finite or non-positive
      * [gain] cannot scale the thresholds meaningfully and also returns [MetricStatus.NO_DATA].
+     *
+     * That NaN/negative handling is an intentional improvement over the inline comparison this
+     * replaced in the Residual Fatigue dashboard card, which mapped NaN to [MetricStatus.WARNING]
+     * and a negative value to [MetricStatus.OPTIMAL]. Neither input is reachable in practice --
+     * `gain * sum(TRIMP) * decay` is finite and non-negative under all normal operation -- so no
+     * shipped behaviour changes; the difference only shows up for values that would themselves
+     * indicate a defect upstream, where "unknown" is the honest answer.
      */
     fun classify(
         value: Float?,

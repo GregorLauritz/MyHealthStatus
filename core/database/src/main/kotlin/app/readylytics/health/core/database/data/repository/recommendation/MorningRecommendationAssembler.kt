@@ -56,6 +56,9 @@ internal val EXAMPLE_STATES =
  * The decision itself is [ComputeWorkoutRecommendationUseCase]'s alone; this class only feeds it and
  * decides whether examples are worth loading.
  */
+// Hilt-annotated for a future direct binding, but currently constructed by hand in
+// `ScoringRepositoryImpl` (from `MorningRecommendationDependencies`) rather than injected --
+// the graph has no binding for this type today.
 @Singleton
 class MorningRecommendationAssembler
     @Inject
@@ -75,24 +78,40 @@ class MorningRecommendationAssembler
          * session is kept across ordinary daytime appends — re-read from Room, so a corrected
          * timestamp or stage breakdown is picked up. A source that no longer exists, or that backed
          * an unavailable decision, triggers a fresh selection instead.
+         *
+         * Returns `null` when the morning recovery inputs could not be computed for this day (see
+         * [MorningRecoveryLoader.load]). `null` is the existing "no snapshot for this day" value —
+         * the day still scores and persists normally, it just carries no guidance. A computation
+         * failure must never be dressed up as one of the unavailable
+         * [WorkoutRecommendationState] values, which are user-facing explanations of *missing data*.
          */
         suspend fun assemble(
             context: ScoringDayContext,
             previous: WorkoutRecommendationSnapshot? = null,
-        ): WorkoutRecommendationSnapshot {
-            val history =
-                sleepSessionRepository.getSince(context.nextDayMidnightMs - CIRCADIAN_HISTORY_WINDOW_MS)
-            val session =
-                resolveMorningSession(context, history, previous)
-                    ?: return WorkoutRecommendationSnapshot(
-                        ruleVersion = RULE_VERSION,
-                        wakeSessionId = null,
-                        wakeTimeMs = null,
-                        decision = evaluator.compute(noSleepInput(context)),
-                    )
+        ): WorkoutRecommendationSnapshot? {
+            val history = sleepSessionRepository.loadCircadianHistory(context)
+            val session = resolveMorningSession(context, history, previous)
+            return if (session == null) {
+                WorkoutRecommendationSnapshot(
+                    ruleVersion = RULE_VERSION,
+                    wakeSessionId = null,
+                    wakeTimeMs = null,
+                    decision = evaluator.compute(noSleepInput(context)),
+                )
+            } else {
+                assembleForSession(context, session, history)
+            }
+        }
 
+        /** `null` when the recovery inputs for [session]'s morning could not be computed. */
+        private suspend fun assembleForSession(
+            context: ScoringDayContext,
+            session: SleepSession,
+            history: List<SleepSessionData>,
+        ): WorkoutRecommendationSnapshot? {
             val wakeTimeMs = session.endTime
-            val decision = evaluator.compute(recoveryLoader.load(context, session, history))
+            val recovery = recoveryLoader.load(context, session, history) ?: return null
+            val decision = evaluator.compute(recovery)
             val examples =
                 if (decision.state in EXAMPLE_STATES) {
                     val fromMs =

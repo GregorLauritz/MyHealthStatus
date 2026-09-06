@@ -33,6 +33,9 @@ private const val MAX_MEMOIZED_WORKOUTS = 512
  * it runs, the 42-day summary history it needs is fetched once per window instead of per workout,
  * and repeated workout ids within a historical pass are memoized.
  */
+// Hilt-annotated for a future direct binding, but currently constructed by hand in
+// `ScoringRepositoryImpl` (from `MorningRecommendationDependencies`) rather than injected --
+// the graph has no binding for this type today.
 @Singleton
 class WorkoutExampleLoader
     @Inject
@@ -75,19 +78,38 @@ class WorkoutExampleLoader
             }
         }
 
+        /**
+         * The 42-day chronic window every candidate needs, fetched once for the whole batch.
+         *
+         * Bounded at both ends. `GetWorkoutDisplayMetricsUseCase` clamps the lower end per workout
+         * anyway and evaluates its ATL/CTL EMA *at* each workout's own date, so a summary dated after
+         * the newest candidate can never contribute to any candidate's result -- while an unbounded
+         * `getSince` would read, and JSON-decode, every summary row through today. During a
+         * historical backfill that turns a fixed 42-day window into a read of the entire remaining
+         * history, once per replayed day.
+         */
         private suspend fun loadHistoricalSummaries(
             candidates: List<WorkoutData>,
             prefs: UserPreferences,
-        ) = dailySummaryRepository.getSince(
-            Instant
-                .ofEpochMilli(candidates.minOf { it.startTime })
-                .atZone(prefs.scoringZone())
-                .toLocalDate()
-                .minusDays(ScoringConstants.CHRONIC_DAYS)
-                .atStartOfDay(prefs.scoringZone())
-                .toInstant()
-                .toEpochMilli(),
-        )
+        ): List<DailySummary> {
+            val zone = prefs.scoringZone()
+            fun midnightOf(
+                epochMs: Long,
+                shiftDays: Long,
+            ): Long =
+                Instant
+                    .ofEpochMilli(epochMs)
+                    .atZone(zone)
+                    .toLocalDate()
+                    .minusDays(shiftDays)
+                    .atStartOfDay(zone)
+                    .toInstant()
+                    .toEpochMilli()
+            return dailySummaryRepository.getInRange(
+                fromMs = midnightOf(candidates.minOf { it.startTime }, ScoringConstants.CHRONIC_DAYS),
+                toMs = midnightOf(candidates.maxOf { it.startTime }, 0L),
+            )
+        }
 
         private suspend fun resolveFinalLoad(
             workout: WorkoutData,
