@@ -911,10 +911,14 @@ a single uncovered day is not evidence a backup predates the feature, and it is 
 repairable — a day whose morning sleep-metrics pass fails legitimately stores no snapshot (§2.11.2),
 deterministically, for the same stored rows — so an "any" test would re-schedule a full recompute on
 *every* restore of that database, forever, for a day whose answer can never change. The narrower test
-costs only the partially-covered-restore case, and that still converges: a partially covered database
-was left behind by an interrupted backfill, so its `scoringVersion` is still stale and
-`DatabaseReadyStartupInitializer`'s version gate re-enqueues the same recompute on the next launch.
-This runs **after** preferences
+costs the partially-covered-restore case: when the restored `scoringVersion` is stale (an interrupted
+backfill), `DatabaseReadyStartupInitializer`'s version gate still re-enqueues the same recompute on the
+next launch, so that case converges regardless of this checker. If the restored `scoringVersion`
+already reads `CURRENT_SCORING_VERSION` — an internally inconsistent backup, or a source device that
+legitimately reached it with a transiently-failing day mixed among successful ones — neither gate
+fires, and the affected day stays `null` until the user runs a manual "Resync Health Connect data."
+This is the same accepted trade-off as an on-device transient failure (§2.11.2): staleness over a
+fabricated explanation, not a new class of gap introduced by restore. This runs **after** preferences
 restore succeeds (or from the failure branch, if preferences restore itself fails) — never before —
 so the retention-bounded check reads the just-restored preferences (scoring zone, retention window)
 rather than risking the worker starting against a pre-restore configuration mid-write. This is a
@@ -1521,9 +1525,9 @@ cannot retroactively move a frozen day's bounds — and a positive strong-recove
 treated as permission to train harder, it only defines the upper bound. Residual fatigue comes from
 `ResidualFatigueComputer.computeAt(wakeTimeMs, prefs)` (§2.8), which reuses the exact single-day
 fallback and its never-backfilled gate, never advances the shared day-end walk-forward accumulator,
-and is not persisted; `computeLive` is now a thin alias of it. A failed sleep-metrics pass is
-re-thrown rather than degraded, so an operational read failure retries the outer computation instead
-of storing a fabricated "no data" state; `CancellationException` propagates throughout.
+and is not persisted; `computeLive` is now a thin alias of it. As described above, a failed
+sleep-metrics pass degrades to no snapshot rather than aborting the day or retrying the outer
+computation; `CancellationException` still propagates throughout.
 
 #### 2.11.3 Historical examples (`WorkoutExampleLoader` → `SelectWorkoutRecommendationExamples`)
 
