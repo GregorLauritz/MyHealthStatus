@@ -103,6 +103,7 @@ fun LazyListScope.dashboardCardContentItems(
         () -> Unit,
         (InsightParams) -> Unit,
     ) -> Unit,
+    workoutRecommendationCard: @Composable (DashboardUiState, (String) -> Unit) -> Unit = { _, _ -> },
 ) {
     val today = uiState.today
     val summary = uiState.summary
@@ -148,6 +149,7 @@ fun LazyListScope.dashboardCardContentItems(
                 onCardVisibilityChanged = onCardVisibilityChanged,
                 onReorderCards = onReorderCards,
                 insightsCard = insightsCard,
+                workoutRecommendationCard = workoutRecommendationCard,
             )
         }
     }

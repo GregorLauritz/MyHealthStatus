@@ -9,6 +9,7 @@ import app.readylytics.health.core.model.domain.dashboard.CardConfiguration
 import app.readylytics.health.core.model.domain.dashboard.CardId
 import app.readylytics.health.core.model.domain.dashboard.DashboardCardCatalog
 import app.readylytics.health.core.model.domain.dashboard.DashboardCardDisplayMode
+import app.readylytics.health.core.model.domain.dashboard.displayName
 import app.readylytics.health.core.ui.components.ManagementBottomSheet
 import app.readylytics.health.core.ui.components.ManagementItem
 import app.readylytics.health.core.ui.components.ManagementSection
@@ -23,6 +24,10 @@ fun CardManagementBottomSheet(
     onDismiss: () -> Unit,
     sheetState: SheetState,
     modifier: Modifier = Modifier,
+    // App-owned titles for cards whose UI label cannot live in a feature-module resource (e.g. a
+    // card whose title is defined in the app module). Checked before the feature resource
+    // fallback below; every card is guaranteed a title by the final displayName() fallback.
+    titleOverrides: Map<CardId, String> = emptyMap(),
 ) {
     ManagementBottomSheet(
         title = stringResource(R.string.manage_cards),
@@ -34,7 +39,10 @@ fun CardManagementBottomSheet(
                         cards.sortedBy { it.position }.map { card ->
                             ManagementItem(
                                 key = "card_${card.cardId.name}",
-                                label = stringResource(card.cardId.displayNameResId),
+                                label =
+                                    titleOverrides[card.cardId]
+                                        ?: card.cardId.displayNameResId?.let { stringResource(it) }
+                                        ?: card.cardId.displayName(),
                                 isVisible = card.isVisible,
                                 supportedModes = DashboardCardCatalog.spec(card.cardId)?.supportedModes.orEmpty(),
                                 requestedMode = DashboardCardCatalog.requestedMode(card),

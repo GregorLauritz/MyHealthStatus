@@ -4,8 +4,11 @@ import androidx.annotation.StringRes
 import app.readylytics.health.core.model.domain.dashboard.CardId
 import app.readylytics.health.core.ui.R as CoreUiR
 
+// Nullable because CardId.WORKOUT_RECOMMENDATION has no feature-owned title resource: its title
+// is app-owned (see WorkoutRecommendationCardContent.kt) and supplied to CardManagementBottomSheet
+// as a title override, resolved before this resource lookup.
 @get:StringRes
-val CardId.displayNameResId: Int
+val CardId.displayNameResId: Int?
     get() =
         when (this) {
             CardId.SLEEP_SCORE -> R.string.card_title_sleep_score
@@ -34,4 +37,5 @@ val CardId.displayNameResId: Int
             CardId.TRAINING_READINESS -> app.readylytics.health.core.ui.R.string.card_title_training_readiness
             CardId.CARDIO_FITNESS -> R.string.card_title_cardio_fitness
             CardId.TSB -> R.string.card_title_tsb
+            CardId.WORKOUT_RECOMMENDATION -> null
         }

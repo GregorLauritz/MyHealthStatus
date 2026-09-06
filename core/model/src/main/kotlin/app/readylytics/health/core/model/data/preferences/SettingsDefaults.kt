@@ -164,6 +164,7 @@ object SettingsDefaults {
             CardConfiguration(CardId.TRAINING_READINESS, isVisible = false, position = 20),
             CardConfiguration(CardId.CARDIO_FITNESS, isVisible = false, position = 21),
             CardConfiguration(CardId.TSB, isVisible = false, position = 22),
+            CardConfiguration(CardId.WORKOUT_RECOMMENDATION, isVisible = true, position = 23),
         )
 
     val DEFAULT_VITALS_CARDS =

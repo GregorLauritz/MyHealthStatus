@@ -90,6 +90,7 @@ private data class SpecialCardCallbacks(
     val onOpenInsight: (InsightParams) -> Unit,
     val onCopySetupPrompt: () -> Unit,
     val onCopyDailyPrompt: () -> Unit,
+    val onWorkoutClick: (String) -> Unit,
     val insightsCard: @Composable (
         DashboardUiState,
         Boolean,
@@ -97,6 +98,7 @@ private data class SpecialCardCallbacks(
         () -> Unit,
         (InsightParams) -> Unit,
     ) -> Unit,
+    val workoutRecommendationCard: @Composable (DashboardUiState, (String) -> Unit) -> Unit,
 )
 
 // Build a map of CardId to composable card content for the Dashboard screen
@@ -123,6 +125,7 @@ fun buildCardDataMap(
     onCardDisplayModeChanged: (CardId, DashboardCardDisplayMode) -> Unit = { _, _ -> },
     onCopySetupPrompt: () -> Unit = {},
     onCopyDailyPrompt: () -> Unit = {},
+    onWorkoutClick: (String) -> Unit = {},
     insightsCard: @Composable (
         DashboardUiState,
         Boolean,
@@ -130,6 +133,7 @@ fun buildCardDataMap(
         () -> Unit,
         (InsightParams) -> Unit,
     ) -> Unit,
+    workoutRecommendationCard: @Composable (DashboardUiState, (String) -> Unit) -> Unit = { _, _ -> },
 ): Map<CardId, @Composable (CardConfiguration) -> Unit> {
     val cardMap = mutableMapOf<CardId, @Composable (CardConfiguration) -> Unit>()
     val ctx = DashboardCardContext(uiState, isEditing, isLoading, onCardDisplayModeChanged)
@@ -163,7 +167,9 @@ fun buildCardDataMap(
                 onOpenInsight = onOpenInsight,
                 onCopySetupPrompt = onCopySetupPrompt,
                 onCopyDailyPrompt = onCopyDailyPrompt,
+                onWorkoutClick = onWorkoutClick,
                 insightsCard = insightsCard,
+                workoutRecommendationCard = workoutRecommendationCard,
             ),
     )
 
@@ -422,6 +428,12 @@ private fun registerSpecialCards(
             onCopySetupPrompt = callbacks.onCopySetupPrompt,
             onCopyDailyPrompt = callbacks.onCopyDailyPrompt,
         )
+    }
+
+    // Unconditional like AI_RECOMMENDATION above: guidance (or its unavailable state) is always
+    // worth showing when the card is visible, unlike Insights which needs an active insight.
+    cardMap[CardId.WORKOUT_RECOMMENDATION] = {
+        callbacks.workoutRecommendationCard(ctx.uiState, callbacks.onWorkoutClick)
     }
 }
 

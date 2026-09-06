@@ -28,4 +28,7 @@ fun CardId.displayName(): String =
         CardId.TRAINING_READINESS -> "Training Readiness"
         CardId.CARDIO_FITNESS -> "Cardio Fitness"
         CardId.TSB -> "Training Stress Balance"
+        // Internal fallback only: the real UI label for this card comes from the app-owned
+        // title override supplied to CardManagementBottomSheet, never from this value.
+        CardId.WORKOUT_RECOMMENDATION -> "Workout Recommendation"
     }

@@ -59,6 +59,7 @@ data class DashboardNavigationCallbacks(
     val onNavigateToBloodPressure: () -> Unit = {},
     val onNavigateToVitals: () -> Unit = {},
     val onNavigateToCardioFitness: () -> Unit = {},
+    val onWorkoutClick: (String) -> Unit = {},
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -71,6 +72,7 @@ internal fun CardManagementSheet(
     onResetToDefaults: () -> Unit,
     onDismiss: () -> Unit,
     sheetState: SheetState,
+    cardTitleOverrides: Map<CardId, String> = emptyMap(),
 ) {
     if (isOpen) {
         CardManagementBottomSheet(
@@ -80,6 +82,7 @@ internal fun CardManagementSheet(
             onResetToDefaults = onResetToDefaults,
             onDismiss = onDismiss,
             sheetState = sheetState,
+            titleOverrides = cardTitleOverrides,
         )
     }
 }
@@ -105,6 +108,7 @@ internal fun MetricGridSection(
         () -> Unit,
         (InsightParams) -> Unit,
     ) -> Unit,
+    workoutRecommendationCard: @Composable (DashboardUiState, (String) -> Unit) -> Unit = { _, _ -> },
 ) {
     val cardInputs = uiState.cardInputs()
     val cardDataMap =
@@ -123,6 +127,7 @@ internal fun MetricGridSection(
                     onNavigateToBloodPressure = navigationCallbacks.onNavigateToBloodPressure,
                     onNavigateToVitals = navigationCallbacks.onNavigateToVitals,
                     onNavigateToCardioFitness = navigationCallbacks.onNavigateToCardioFitness,
+                    onWorkoutClick = navigationCallbacks.onWorkoutClick,
                     isEditing = isEditing,
                     isLoading = isLoading,
                     onDismissInsight = onDismissInsight,
@@ -132,6 +137,7 @@ internal fun MetricGridSection(
                     onCopySetupPrompt = onCopySetupPrompt,
                     onCopyDailyPrompt = onCopyDailyPrompt,
                     insightsCard = insightsCard,
+                    workoutRecommendationCard = workoutRecommendationCard,
                 ),
             )
         }
@@ -187,6 +193,7 @@ fun DashboardRoute(
     onNavigateToBloodPressure: () -> Unit = {},
     onNavigateToVitals: () -> Unit = {},
     onNavigateToCardioFitness: () -> Unit = {},
+    onWorkoutClick: (String) -> Unit = {},
     onOpenInsight: (InsightParams) -> Unit = {},
     insightDetail: @Composable (() -> Unit)? = null,
     insightsCard: @Composable (
@@ -196,6 +203,8 @@ fun DashboardRoute(
         () -> Unit,
         (InsightParams) -> Unit,
     ) -> Unit = { _, _, _, _, _ -> },
+    workoutRecommendationCard: @Composable (DashboardUiState, (String) -> Unit) -> Unit = { _, _ -> },
+    cardTitleOverrides: Map<CardId, String> = emptyMap(),
     viewModel: DashboardViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -235,6 +244,7 @@ fun DashboardRoute(
                 onNavigateToBloodPressure = onNavigateToBloodPressure,
                 onNavigateToVitals = onNavigateToVitals,
                 onNavigateToCardioFitness = onNavigateToCardioFitness,
+                onWorkoutClick = onWorkoutClick,
             ),
         onToggleCardManagement = viewModel::toggleCardManagement,
         onCancelCardManagement = viewModel::onCancelCardManagement,
@@ -254,6 +264,8 @@ fun DashboardRoute(
         onCopyDailyPrompt = { viewModel.onEvent(DashboardEvent.RequestDailyPromptCopy) },
         insightDetail = insightDetail,
         insightsCard = insightsCard,
+        workoutRecommendationCard = workoutRecommendationCard,
+        cardTitleOverrides = cardTitleOverrides,
     )
 }
 
@@ -288,6 +300,8 @@ fun DashboardScreen(
         () -> Unit,
         (InsightParams) -> Unit,
     ) -> Unit = { _, _, _, _, _ -> },
+    workoutRecommendationCard: @Composable (DashboardUiState, (String) -> Unit) -> Unit = { _, _ -> },
+    cardTitleOverrides: Map<CardId, String> = emptyMap(),
 ) {
     val manageState = rememberManageLayoutState()
 
@@ -300,6 +314,7 @@ fun DashboardScreen(
             onResetToDefaults = onResetToDefaults,
             onDismiss = manageState.closeManage,
             sheetState = manageState.sheetState,
+            cardTitleOverrides = cardTitleOverrides,
         )
 
         LazyColumn(
@@ -323,6 +338,7 @@ fun DashboardScreen(
                 onReorderCards = onReorderCards,
                 onToggleCardManagement = onToggleCardManagement,
                 insightsCard = insightsCard,
+                workoutRecommendationCard = workoutRecommendationCard,
             )
         }
 
