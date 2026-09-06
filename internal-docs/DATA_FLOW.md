@@ -1534,8 +1534,10 @@ computation; `CancellationException` still propagates throughout.
 Only `EASY` and `HARDER` decisions load examples. The window is `wakeTime − 30 days` through
 `wakeTime`. `WorkoutExampleLoader` narrows candidate rows first (duration > 15 min, non-blank
 exercise type, fully inside the window), fetches the 42-day summary history once per window rather
-than per workout, and memoizes `GetWorkoutDisplayMetricsUseCase.execute` per (workout id,
-preferences) so a historical replay does not re-run it for repeated ids.
+than per workout, and runs `GetWorkoutDisplayMetricsUseCase.execute` afresh on every load.
+Classifications are not cached across scoring calls: stable-ID workout replacements, HR-sample
+corrections, and RHR-baseline corrections must all be reflected when examples are recomputed,
+even when workout IDs and preferences remain unchanged.
 
 Both of the assembly's history reads are **bounded at both ends**, via
 `SleepSessionRepository.getInRange`/`DailySummaryRepository.getInRange` (the bounded counterparts of
@@ -1895,7 +1897,7 @@ defaults when unset).
 | `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/recommendation/MorningRecommendationAssembler.kt` | Processing — morning snapshot | anchor selection → bounded recovery inputs → evaluator → example selection (§2.11.1) |
 | `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/recommendation/MorningRecoveryLoader.kt` | Processing — bounded recovery inputs | re-runs `ComputeSleepMetricsUseCase` bounded at the wake time (`forceLiveBaselines`, wake-bounded RHR baseline, `CalibrationGate` at wake); frozen-profile HRV bounds; `computeAt` fatigue (§2.11.2) |
 | `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/CalibrationGate.kt` | Processing — calibration gate | frozen ⇒ calibrated, else live valid-night count; optional `toMs` for the morning anchor (§2.4, §2.11.2) |
-| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/recommendation/WorkoutExampleLoader.kt` | Processing — example candidates | 30-day pre-wake window, pre-narrowed rows, one summary prefetch, memoized display metrics (§2.11.3) |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/recommendation/WorkoutExampleLoader.kt` | Processing — example candidates | 30-day pre-wake window, pre-narrowed rows, one summary prefetch, fresh display metrics per load (§2.11.3) |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/repository/WalkForwardFatigueContext.kt` | Processing — walk-forward accumulator | prefetched impulse series + running accumulated fatigue (WP-27) |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/repository/WalkForwardVo2MaxContext.kt` | Processing — walk-forward VO2 Max lookup | prefetched wearable VO2 Max readings (`TreeMap<Long, Float>`), `floorEntry`-based per-day lookup (§2.6) |
 | `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/ResidualFatigueComputer.kt` | Processing — fatigue snapshot | per-day snapshot at next-day midnight (`compute`); non-persisting decay through any instant (`computeAt`, aliased by `computeLive`); exact retained-history seed (§2.8, §2.11.2) |

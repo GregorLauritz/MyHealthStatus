@@ -21,9 +21,6 @@ import javax.inject.Singleton
  */
 private const val MIN_EXAMPLE_DURATION_MINUTES = 15
 
-/** Bounds the memo so a long historical replay cannot grow it without limit. */
-private const val MAX_MEMOIZED_WORKOUTS = 512
-
 /**
  * Loads the user's own past workouts as candidate examples for the morning recommendation.
  *
@@ -31,7 +28,8 @@ private const val MAX_MEMOIZED_WORKOUTS = 512
  * re-derived score, so an example reads exactly as the workout does everywhere else in the app.
  * That call is expensive, so rows are narrowed to the ones that could survive selection *before*
  * it runs, the 42-day summary history it needs is fetched once per window instead of per workout,
- * and repeated workout ids within a historical pass are memoized.
+ * and classifications are refreshed on every load so corrected workouts, HR samples, and
+ * RHR baselines are reflected even when workout ids and preferences are unchanged.
  */
 // Hilt-annotated for a future direct binding, but currently constructed by hand in
 // `ScoringRepositoryImpl` (from `MorningRecommendationDependencies`) rather than injected --
@@ -44,19 +42,6 @@ class WorkoutExampleLoader
         private val dailySummaryRepository: DailySummaryRepository,
         private val getWorkoutDisplayMetricsUseCase: GetWorkoutDisplayMetricsUseCase,
     ) {
-        private data class MemoKey(
-            val workoutId: String,
-            val prefs: UserPreferences,
-        )
-
-        // Guarded by its own monitor: the loader is a singleton and nothing else serializes callers.
-        // A racing duplicate compute is harmless; a corrupted map is not.
-        private val loadLevelMemo =
-            object : LinkedHashMap<MemoKey, WorkoutLoadLevel?>(MAX_MEMOIZED_WORKOUTS, 0.75f, true) {
-                override fun removeEldestEntry(eldest: Map.Entry<MemoKey, WorkoutLoadLevel?>): Boolean =
-                    size > MAX_MEMOIZED_WORKOUTS
-            }
-
         suspend fun load(
             fromMs: Long,
             throughMs: Long,
@@ -115,22 +100,14 @@ class WorkoutExampleLoader
             workout: WorkoutData,
             prefs: UserPreferences,
             historicalSummaries: List<DailySummary>,
-        ): WorkoutLoadLevel? {
-            val key = MemoKey(workout.id, prefs)
-            synchronized(loadLevelMemo) {
-                if (loadLevelMemo.containsKey(key)) return loadLevelMemo[key]
-            }
-            val level =
-                getWorkoutDisplayMetricsUseCase
-                    .execute(
-                        workout = workout,
-                        preferences = prefs,
-                        historicalSummaries = historicalSummaries,
-                    ).classification
-                    ?.finalLoad
-            synchronized(loadLevelMemo) { loadLevelMemo[key] = level }
-            return level
-        }
+        ): WorkoutLoadLevel? =
+            getWorkoutDisplayMetricsUseCase
+                .execute(
+                    workout = workout,
+                    preferences = prefs,
+                    historicalSummaries = historicalSummaries,
+                ).classification
+                ?.finalLoad
 
         private fun WorkoutData.isEligibleExample(
             fromMs: Long,
