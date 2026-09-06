@@ -36,6 +36,7 @@ import app.readylytics.health.core.ui.components.CardConfigurationsList
 import app.readylytics.health.core.ui.components.CardDataMap
 import app.readylytics.health.core.ui.components.ReorderableCardGrid
 import app.readylytics.health.core.ui.components.rememberManageLayoutState
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
@@ -60,6 +61,14 @@ data class DashboardNavigationCallbacks(
     val onNavigateToVitals: () -> Unit = {},
     val onNavigateToCardioFitness: () -> Unit = {},
     val onWorkoutClick: (String) -> Unit = {},
+    // Bundled here — rather than as standalone parameters on MetricGridSection/
+    // dashboardCardContentItems/DashboardScreen, all of which already accept
+    // `navigationCallbacks: DashboardNavigationCallbacks` unchanged — so that adding an
+    // app-owned card slot never grows those already-long parameter lists. Not "navigation" in
+    // the strict sense, but the same "app-supplied dashboard wiring" bundle onWorkoutClick above
+    // already lives in.
+    val workoutRecommendationCard: @Composable (DashboardUiState, (String) -> Unit) -> Unit = { _, _ -> },
+    val cardTitleOverrides: Map<CardId, String> = emptyMap(),
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -108,7 +117,6 @@ internal fun MetricGridSection(
         () -> Unit,
         (InsightParams) -> Unit,
     ) -> Unit,
-    workoutRecommendationCard: @Composable (DashboardUiState, (String) -> Unit) -> Unit = { _, _ -> },
 ) {
     val cardInputs = uiState.cardInputs()
     val cardDataMap =
@@ -137,7 +145,7 @@ internal fun MetricGridSection(
                     onCopySetupPrompt = onCopySetupPrompt,
                     onCopyDailyPrompt = onCopyDailyPrompt,
                     insightsCard = insightsCard,
-                    workoutRecommendationCard = workoutRecommendationCard,
+                    workoutRecommendationCard = navigationCallbacks.workoutRecommendationCard,
                 ),
             )
         }
@@ -177,6 +185,21 @@ private fun DashboardSnackbarEffects(
             snackbarHostState.showSnackbar(ColoredSnackbarVisuals(copiedMessage, isError = false))
             viewModel.clearDailyPromptText()
         }
+    }
+}
+
+// Small helper so this single-use snackbar action doesn't add lines to DashboardRoute's body.
+private fun copySetupPromptAndNotify(
+    scope: CoroutineScope,
+    clipboardManager: Clipboard,
+    clipLabel: String,
+    setupPrompt: String,
+    copiedMessage: String,
+    snackbarHostState: SnackbarHostState,
+) {
+    scope.launch {
+        clipboardManager.setClipEntry(ClipEntry(ClipData.newPlainText(clipLabel, setupPrompt)))
+        snackbarHostState.showSnackbar(ColoredSnackbarVisuals(copiedMessage, isError = false))
     }
 }
 
@@ -245,6 +268,8 @@ fun DashboardRoute(
                 onNavigateToVitals = onNavigateToVitals,
                 onNavigateToCardioFitness = onNavigateToCardioFitness,
                 onWorkoutClick = onWorkoutClick,
+                workoutRecommendationCard = workoutRecommendationCard,
+                cardTitleOverrides = cardTitleOverrides,
             ),
         onToggleCardManagement = viewModel::toggleCardManagement,
         onCancelCardManagement = viewModel::onCancelCardManagement,
@@ -256,16 +281,11 @@ fun DashboardRoute(
         onRestoreInsights = { viewModel.onEvent(DashboardEvent.RestoreInsights) },
         onOpenInsight = onOpenInsight,
         onCopySetupPrompt = {
-            scope.launch {
-                clipboardManager.setClipEntry(ClipEntry(ClipData.newPlainText(clipLabel, setupPrompt)))
-                snackbarHostState.showSnackbar(ColoredSnackbarVisuals(copiedMessage, isError = false))
-            }
+            copySetupPromptAndNotify(scope, clipboardManager, clipLabel, setupPrompt, copiedMessage, snackbarHostState)
         },
         onCopyDailyPrompt = { viewModel.onEvent(DashboardEvent.RequestDailyPromptCopy) },
         insightDetail = insightDetail,
         insightsCard = insightsCard,
-        workoutRecommendationCard = workoutRecommendationCard,
-        cardTitleOverrides = cardTitleOverrides,
     )
 }
 
@@ -300,8 +320,6 @@ fun DashboardScreen(
         () -> Unit,
         (InsightParams) -> Unit,
     ) -> Unit = { _, _, _, _, _ -> },
-    workoutRecommendationCard: @Composable (DashboardUiState, (String) -> Unit) -> Unit = { _, _ -> },
-    cardTitleOverrides: Map<CardId, String> = emptyMap(),
 ) {
     val manageState = rememberManageLayoutState()
 
@@ -314,7 +332,7 @@ fun DashboardScreen(
             onResetToDefaults = onResetToDefaults,
             onDismiss = manageState.closeManage,
             sheetState = manageState.sheetState,
-            cardTitleOverrides = cardTitleOverrides,
+            cardTitleOverrides = navigationCallbacks.cardTitleOverrides,
         )
 
         LazyColumn(
@@ -338,7 +356,6 @@ fun DashboardScreen(
                 onReorderCards = onReorderCards,
                 onToggleCardManagement = onToggleCardManagement,
                 insightsCard = insightsCard,
-                workoutRecommendationCard = workoutRecommendationCard,
             )
         }
 
