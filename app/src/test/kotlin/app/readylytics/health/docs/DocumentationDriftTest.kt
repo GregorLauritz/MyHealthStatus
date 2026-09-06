@@ -428,6 +428,16 @@ class DocumentationDriftTest {
             dataFlowMd.contains("external migration owns v7"),
             "expected internal-docs/DATA_FLOW.md to record that the external migration owns v7",
         )
+        // Task 7 corrected a component-inventory row that had been left at "v17"/"17 entities"
+        // since before schema v18/v19 shipped. Guard against that staleness recurring.
+        assertFalse(
+            dataFlowMd.contains("Room DB (v17)") || dataFlowMd.contains("17 entities"),
+            "internal-docs/DATA_FLOW.md must not reference the stale pre-Task-7 schema version/entity count",
+        )
+        assertTrue(
+            dataFlowMd.contains("Room DB (v$version)"),
+            "expected internal-docs/DATA_FLOW.md's component-inventory row to name the current schema version",
+        )
     }
 
     @Test

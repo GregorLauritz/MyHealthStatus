@@ -54,7 +54,7 @@ Paths below are rooted at the project root. Module prefixes are explicit, for ex
                │   columns in place, near-no-op on identical re-ingest; others: @Upsert on stable id
                ▼
 ┌──────────────────────────────┐
-│  HealthDatabase (SQLite v18) │   18 entities — single source of truth
+│  HealthDatabase (SQLite v19) │   18 entities — single source of truth
 └──────────────┬───────────────┘
                │ raw DAO reads (local; no further HC calls)
                ▼
@@ -890,6 +890,10 @@ load-bearing for real. Both a full historical resync (always `[retentionStart, t
 escalated correction (deferred to that same full resync via `REQUIRES_HISTORICAL_RESYNC`) satisfy
 the same dependency through an entirely separate mechanism — always ending at `today` — so this
 wiring's practical value today is discoverability and future-proofing, not active protection.
+Either way, this recompute never triggers a Health Connect fetch merely to repair examples: both
+the inline daily-sync walk-forward and the full/escalated resync recompute purely from rows already
+in Room (`ScoringRepositoryImpl.computeDailySummary`, §2.11.5) — widening `exampleFanOutRange`
+changes which local days get re-evaluated, never whether Health Connect is queried again.
 
 **Restore compatibility.** `LocalRestoreManager` no longer trusts a restored backup's `scoringVersion`
 preference to decide whether recommendations need backfilling — a backup can be internally
@@ -1522,6 +1526,20 @@ final tiebreak. A nap recorded that afternoon and a workout recorded that evenin
 snapshot byte-for-byte unchanged — this is asserted directly in
 `MorningRecommendationAssemblerTest`.
 
+**Reproducibility is bounded by retention, not unconditional.** The guarantee above holds only while
+the raw sleep/HR/HRV history a replay needs is still on-device. §2.11.2 deliberately re-derives HRV
+and RHR baselines live at wake time (`forceLiveBaselines = true`) rather than reusing the day's frozen,
+day-end-bounded snapshot — necessary for correctness, since a frozen snapshot was computed with a
+different bounding regime. But a live re-derivation reads whatever raw history currently exists in
+Room: once `DataCleanupWorker` prunes samples older than the retention cutoff (§1's Cold tier), a
+replay of a day near or before that cutoff can see a shorter HRV/RHR lookback window than the original
+morning computation did, because some of the nights that originally fed its baseline are no longer
+present (or now only exist as a warm-tier reconstruction, itself a measured approximation — see
+"Determinism across tiers" above). This is the same **idempotent-within-a-tier** doctrine this
+document already applies to warm-tier HR reconstruction, extended to the recommendation path: replay
+reproduces the original decision exactly as long as the underlying raw window is unchanged, and
+degrades to a measured approximation, not a bit-identical replay, once retention has moved that window.
+
 #### 2.11.5 Persistence (`WorkoutRecommendationCodec`, `daily_summaries.workoutRecommendationJson`)
 
 `ScoringRepositoryImpl.computeDailySummary` calls `MorningRecommendationAssembler.assemble` last —
@@ -1769,7 +1787,7 @@ defaults when unset).
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/model/VitalStatusClassifiers.kt`      | Domain — canonical steps/heart-rate status seams     | `StepsStatusClassifier` and `HeartRateStatusClassifier` classify display statuses         |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/service/HealthMetricsService.kt`     | Domain — canonical BP status seam and facade         | delegates BMI/body-fat assessments; owns blood-pressure assessment and component chart-band metadata derived from the same thresholds |
 | `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/calculation/HealthMetricsCalculator.kt` | Domain — facade (delegates)                     | `assessBmi()`/`assessBodyFatPercent()` → `BodyCompositionAssessment`; `assessBloodPressure()` → `HealthMetricsService` |
-| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/local/HealthDatabase.kt`                                             | Storage — Room DB (v17)                             | 17 entities; pre-bridge Room migration chain ends at v6; external migration owns v7; Room owns v7→v17 |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/local/HealthDatabase.kt`                                             | Storage — Room DB (v19)                             | 18 entities; pre-bridge Room migration chain ends at v6; external migration owns v7; Room owns v7→v19 |
 | `app/src/main/kotlin/app/readylytics/health/data/migration/DatabaseReadinessGate.kt`                                            | Storage — pre-Room readiness guard                  | missing or v7..`DATABASE_VERSION` ready; v5/v6 or resumable metadata require external migration |
 | `app/src/main/kotlin/app/readylytics/health/data/migration/V7DatabaseMigrator.kt`                                               | Storage — resumable external v7 migration           | preflight; 10k keyset copy/checkpoint; per-index transactions; validated atomic cutover  |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/migration/DatabaseMigrationModels.kt`                                 | Domain — migration contracts                        | readiness inspector/state; phase/progress/result models                                  |
