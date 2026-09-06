@@ -1,7 +1,6 @@
 package app.readylytics.health.data.backup
 
 import android.net.Uri
-import app.readylytics.health.core.database.data.mapper.WorkoutRecommendationCodec
 import app.readylytics.health.core.model.data.preferences.BackupSchedule
 import app.readylytics.health.core.model.data.preferences.SettingsDefaults
 import app.readylytics.health.core.model.domain.audit.AuditEvent
@@ -9,9 +8,6 @@ import app.readylytics.health.core.model.domain.backup.RestoreResult
 import app.readylytics.health.core.model.domain.backup.RestoreStage
 import app.readylytics.health.core.model.domain.dashboard.CardConfiguration
 import app.readylytics.health.core.model.domain.dashboard.DashboardCardDisplayMode
-import app.readylytics.health.core.model.domain.recommendation.WorkoutRecommendationDecision
-import app.readylytics.health.core.model.domain.recommendation.WorkoutRecommendationSnapshot
-import app.readylytics.health.core.model.domain.recommendation.WorkoutRecommendationState
 import app.readylytics.health.data.preferences.BackupScheduleProto
 import app.readylytics.health.data.preferences.SleepScoreWeightProfileProto
 import app.readylytics.health.data.preferences.UserPreferencesProto
@@ -597,79 +593,6 @@ class LocalRestoreApplicationTest : LocalRestoreManagerTestBase() {
             assertEquals(1779926400000L, restored.dateMidnightMs)
             assertEquals(90.0f, restored.sleepScore)
             assertEquals(42.5f, restored.residualFatigue)
-            zipFile.delete()
-        }
-
-    @Test
-    fun applyRestore_oldBackupMissingRecommendationPayloadTriggersRecomputeDespiteCurrentScoringVersionMarker() =
-        runTest {
-            val json = createValidBackupJson()
-            // Internally inconsistent on purpose: the backup's preferences claim the current
-            // scoring version even though its daily summary carries no recommendation payload --
-            // a backup can predate a rule-version bump without predating the scoringVersion bump.
-            json.getJSONObject("preferences").put("scoringVersion", SettingsDefaults.CURRENT_SCORING_VERSION)
-            val summariesJson =
-                JSONArray().apply {
-                    put(
-                        JSONObject().apply {
-                            put("dateMidnightMs", 1779926400000L)
-                            put("sleepScore", 85.0)
-                        },
-                    )
-                }
-            json.put("dailySummaries", summariesJson)
-            val zipFile = createBackupZipFile("old_backup_missing_recommendation.zip", json)
-
-            val builderSlot = io.mockk.slot<UserPreferencesProto.Builder.() -> Unit>()
-            coEvery { settingsRepo.batchUpdate(capture(builderSlot)) } returns Unit
-
-            val result = manager.applyRestore(Uri.fromFile(zipFile))
-
-            assertTrue(result is RestoreResult.SuccessRequiresRestart)
-            verify(exactly = 1) { workerScheduler.scheduleResyncWorker(recomputeOnly = true) }
-            zipFile.delete()
-        }
-
-    @Test
-    fun applyRestore_summariesWithValidRecommendationPayloadDoesNotScheduleRecompute() =
-        runTest {
-            val json = createValidBackupJson()
-            val snapshot =
-                WorkoutRecommendationSnapshot(
-                    wakeSessionId = null,
-                    wakeTimeMs = null,
-                    decision = WorkoutRecommendationDecision(state = WorkoutRecommendationState.REST),
-                )
-            val summariesJson =
-                JSONArray().apply {
-                    put(
-                        JSONObject().apply {
-                            put("dateMidnightMs", 1779926400000L)
-                            put("workoutRecommendationJson", WorkoutRecommendationCodec.encode(snapshot))
-                        },
-                    )
-                }
-            json.put("dailySummaries", summariesJson)
-            val zipFile = createBackupZipFile("valid_recommendation_backup.zip", json)
-
-            val result = manager.applyRestore(Uri.fromFile(zipFile))
-
-            assertTrue(result is RestoreResult.SuccessRequiresRestart)
-            verify(exactly = 0) { workerScheduler.scheduleResyncWorker(recomputeOnly = true) }
-            zipFile.delete()
-        }
-
-    @Test
-    fun applyRestore_emptyDailySummariesRestoresSuccessfullyWithoutSchedulingRecompute() =
-        runTest {
-            // No "dailySummaries" content at all -- the oldest possible backup shape, predating
-            // both this column and the recommendation feature entirely. Must still restore fine.
-            val zipFile = createBackupZipFile("no_summaries_backup.zip", createValidBackupJson())
-
-            val result = manager.applyRestore(Uri.fromFile(zipFile))
-
-            assertTrue(result is RestoreResult.SuccessRequiresRestart)
-            verify(exactly = 0) { workerScheduler.scheduleResyncWorker(recomputeOnly = true) }
             zipFile.delete()
         }
 

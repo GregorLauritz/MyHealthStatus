@@ -135,7 +135,7 @@ explicit and idempotent.
 | `DataRollupWorker`            | `app/src/main/kotlin/app/readylytics/health/workers/DataRollupWorker.kt`                | Daily hot→warm rollup; resolves the 90-day `RetentionBounds.resolveHotTierCutoffMs()` and delegates to `DataRollupManager`. `Result.retry()` on transient failure. **R2-CACHE-001:** on a non-empty touch, enqueues a bounded recompute-only resync (`WorkerScheduler.scheduleResyncWorker(recomputeOnly = true, startDate, endDate)`) over `ScoreInvalidation.affectedRange(touched, today)` — same edge as `DataCleanupWorker`, above. A no-op rollup enqueues nothing. |
 | `DataRollupManager`           | `core/database/src/main/kotlin/app/readylytics/health/core/database/data/local/DataRollupManager.kt`  | Atomically downsamples plausibility-filtered raw `heart_rate_records` older than the cutoff into `hr_minute_buckets` (min/max/avg/count plus a p5/p25/p50/p75/p95 percentile sketch, computed in Kotlin via `MinuteBucketAggregator` since SQLite has no `PERCENTILE_CONT`) then deletes the raw rows, day-chunked (R2-DB-004). **R2-CACHE-001:** `rollupExpiredHotTier` returns the `ScoreInvalidation.AffectedRange?` it actually touched (min/max dates of every rolled-up raw sample, merged across day-chunks), or `null` on a no-op run. |
 | `RetentionCleanup`            | `core/database/src/main/kotlin/app/readylytics/health/core/database/data/local/RetentionCleanup.kt`             | Executes deletions of data strictly older than the cutoff across all 13 sensitive tables. **DB-002:** `heart_rate_records` and `hrv_records` (the two high-volume tables) are deleted via `deleteBeforeTimestampBatch`, each call bounded to 10,000 rows and run in its own transaction, looping until a batch returns fewer than 10,000 deletes — so a large first-time cleanup opens many bounded transactions instead of one unbounded delete/WAL growth spike, and a killed worker mid-loop leaves already-deleted rows deleted (idempotent restart: `WHERE timestampMs < cutoff` simply matches fewer rows next time). The remaining 11 low-volume tables (`sleep_sessions`, `hr_minute_buckets`, `workout_records`, `daily_summaries`, `weight_records`, `body_fat_records`, `blood_pressure_records`, `oxygen_saturation_records`, `body_temperature_records`, `step_records`, `vo2_max_records`) are deleted together in one single transaction, as before. **R2-CACHE-001:** `deleteBefore` returns the `ScoreInvalidation.AffectedRange?` it actually touched — the earliest pre-deletion timestamp across `heart_rate_records`/`hr_minute_buckets` (the two sources that feed the scoring walk-forward and change size with the rolling cutoff) through `cutoffMs`, read before deletion — or `null` when nothing was older than the cutoff. |
-| `ScoreInvalidation`           | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/sync/ScoreInvalidation.kt`             | Pure Kotlin, zero Android dependencies. `AffectedRange(start, endInclusive)` plus `affectedRange(changed, today)`, which widens a touched range forward by `MAX_DEPENDENT_WINDOW_DAYS` (84 — the longest scoring lookback: the 84-day TRIMP fetch window) and caps the result at `today`. Bridges `DataRollupManager`/`RetentionCleanup's touched-range output to the bounded recompute-only resync both workers enqueue (see `DataRollupWorker`/`DataCleanupWorker`, above, and `WorkerScheduler.scheduleResyncWorker`'s `startDate`/`endDate` params below). A depth-guard test enumerates every scoring lookback constant (`ACUTE_DAYS`, `CHRONIC_DAYS`, `BASELINE_DAYS`, `HRV_SIGMA_WINDOW_DAYS`, `CIRCADIAN_CONSISTENCY_WINDOW_DAYS`, `MATURE_DATA_TENURE_DAYS`, the 84-day TRIMP fetch) and fails the build if any exceeds `MAX_DEPENDENT_WINDOW_DAYS`. |
+| `ScoreInvalidation`           | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/sync/ScoreInvalidation.kt`             | Pure Kotlin, zero Android dependencies. `AffectedRange(start, endInclusive)` plus `affectedRange(changed, today)`, which widens a touched range forward by `MAX_DEPENDENT_WINDOW_DAYS` (84 — the longest scoring lookback: the 84-day TRIMP fetch window) and caps the result at `today`. Bridges `DataRollupManager`/`RetentionCleanup's touched-range output to the bounded recompute-only resync both workers enqueue (see `DataRollupWorker`/`DataCleanupWorker`, above, and `WorkerScheduler.scheduleResyncWorker`'s `startDate`/`endDate` params below). A depth-guard test enumerates every scoring lookback constant (`ACUTE_DAYS`, `CHRONIC_DAYS`, `BASELINE_DAYS`, `HRV_SIGMA_WINDOW_DAYS`, `CIRCADIAN_CONSISTENCY_WINDOW_DAYS`, `MATURE_DATA_TENURE_DAYS`, the 84-day TRIMP fetch) and fails the build if any exceeds `MAX_DEPENDENT_WINDOW_DAYS`. **Task 5:** also `exampleFanOutRange(correctionDate, today, retentionStart)` — a second, additive dependency (`EXAMPLE_SELECTION_LOOKBACK_DAYS` = 30, its own depth-guard against `MAX_DEPENDENT_WINDOW_DAYS`) for recommendation-example eligibility (§2.11.3/§1.2's correction-fan-out paragraph), bounding `[correctionDate, correctionDate + 30]` to `[retentionStart, today]`. Wired into `DailySyncUseCase.resolveInlineOldestTargetDay`, merged alongside the naive out-of-window-affected-date floor. |
 | `RetentionBounds`             | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/util/RetentionBounds.kt`             | Single source of truth for retention→date/instant math. `resolveHistoricalWindow(prefs, now)` derives `endDate` in `prefs.scoringZone()`, then enabled → `startDate = endDate − retentionDays`, disabled → `endDate − ABSOLUTE_MAX_DAYS` (3650 / 10y), and binds that date to scoring-zone midnight as `startTimeMs`. Inclusion is `workout.startTime >= startTimeMs`; cleanup deletes the complementary `< startTimeMs` set. Also owns the fixed 90-day hot/warm boundary (`HOT_TIER_WINDOW_DAYS`, `resolveHotTierCutoffMs`). |
 | `RoomTransactionRunner`       | `core/database/src/main/kotlin/app/readylytics/health/core/database/data/local/RoomTransactionRunner.kt`        | Wraps `HealthDatabase.withTransaction { … }`. Ingestion commits parent/low-volume records together, then HR and HRV in bounded 500-row transactions with cancellation checks between batches. A failed window may contain partial new upserts, but never deletes prior valid rows; its unchanged checkpoint causes an idempotent replay. Also wraps the sync/resync walk-forward recompute via `DailyRecomputeSupport`. |
 | `HealthChangeSynchronizer`    | `core/healthconnect/src/main/kotlin/app/readylytics/health/core/healthconnect/domain/sync/HealthChangeSynchronizer.kt`    | Reconciles differential Health Connect Changes API responses (upsertions and deletions) incrementally during daily/foreground sync. As of R2-ARCH-002, this path shares the same persistence boundary as the bulk/resync path (`HealthIngestionCoordinator`), split across two ports to keep both under detekt's function-count limit — `HealthChangeSynchronizerImpl` holds no DAO reference and no `Context`; it persists via the existing `HealthIngestionStore` (`persist`/`persistHeartRateSamples`/`persistHrvSamples`, unchanged) and resolves per-record delete/date-lookup via the new `HealthChangeIngestionStore.affectedDatesForRecord`/`deleteRecord`, session linkage via `HealthChangeIngestionStore.sessionSpansOverlapping` (hoisted once per changes page, R2-HC-003), and provisional workout metrics via `HealthChangeIngestionStore.heartRateSamplesForMetrics`. HR/HRV/exercise upserts resolve real overlapping sleep/workout session spans and, for exercise, real stored HR samples, so a changes-path row is link/metric-correct at write time rather than only after the next `DailySyncUseCase` reconcile pass (HC-004). The synchronizer returns candidate next tokens but never persists them; the daily-sync flow (`DailySyncUseCase`) commits them only after requested-window ingest, reconciliation, step fetch, and scoring all succeed. Changes older than the requested scoring window leave tokens uncommitted and return `REQUIRES_HISTORICAL_RESYNC`, routing correction through the durable worker without widening foreground scoring. |
@@ -868,25 +868,48 @@ general scoring-formula lookback `ScoreInvalidation.affectedRange` widens for (`
 `[correctionDate, correctionDate + 30 days]` intersected with `[retentionStart, today]`, returning
 `null` when that intersection is empty (e.g. a correction older than retention). It is purely
 additive — callers holding both a general `affectedRange` and this fan-out range must `merge` them
-rather than pick one, so neither dependency's horizon is ever silently shrunk. Whatever recompute this
-produces is a bounded, recompute-only pass like any other (`WorkerScheduler.scheduleResyncWorker(recomputeOnly
-= true, startDate, endDate)`) -- it never performs a Health Connect fetch merely to repair examples, and
-per the paragraph above, it never falsely advances the scoring version.
+rather than pick one, so neither dependency's horizon is ever silently shrunk.
+
+**Real call site:** `DailySyncUseCase.resolveInlineOldestTargetDay` (private,
+`core/healthconnect/.../domain/sync/DailySyncUseCase.kt`), which computes the earliest day the
+foreground daily sync's inline (non-escalated) walk-forward must recompute for an out-of-window
+Health Connect change (`HealthChangeSyncOutcome.affectedDates` — a corrected/deleted workout among
+them). It `merge`s `exampleFanOutRange` for every such affected date into the naive floor
+(`outOfWindowAffected.minOrNull()`) rather than trusting that floor alone, so the dependency is an
+explicit, tested call rather than an unwritten property of ad hoc date arithmetic. As of this
+writing that merge is a **provable no-op**: `outOfWindowAffected.minOrNull()` is already ≤ every
+`exampleFanOutRange(date, ...).start` (since `naiveOldest ≤ date ≤ max(date, retentionStart)` for
+every `date` in the same set), and the inline walk-forward already recomputes through `today` —
+exactly `exampleFanOutRange`'s own capped upper bound — regardless of this merge. Deleting this
+wiring therefore cannot be caught by a *value* regression today (`DailySyncUseCaseExampleFanOutTest`
+pins the reachable range, but the identical range is also produced without the merge); it protects
+against the wiring being *removed from the call graph entirely* (a compile-time dependency) and
+serves as executable documentation of the invariant for whichever future change (e.g. an in-app
+workout edit/delete feature, or a change to how far the inline walk-forward widens) could make it
+load-bearing for real. Both a full historical resync (always `[retentionStart, today]`) and an
+escalated correction (deferred to that same full resync via `REQUIRES_HISTORICAL_RESYNC`) satisfy
+the same dependency through an entirely separate mechanism — always ending at `today` — so this
+wiring's practical value today is discoverability and future-proofing, not active protection.
 
 **Restore compatibility.** `LocalRestoreManager` no longer trusts a restored backup's `scoringVersion`
 preference to decide whether recommendations need backfilling — a backup can be internally
 inconsistent (e.g. it predates a rule-version bump the restored `scoringVersion` doesn't reflect), and
-a pre-v19-schema backup carries no `workoutRecommendationJson` column at all. Instead, immediately
-after the database restore transaction commits (before preferences restore, so it runs even if that
-later stage fails), it inspects the restored `daily_summaries` rows directly: if any row's
+a pre-v19-schema backup carries no `workoutRecommendationJson` column at all. Instead, a dedicated
+`RestoreRecommendationCoverageChecker` inspects the restored `daily_summaries` rows directly, bounded
+to *retained* rows (`RetentionBounds.resolveRetentionCutoffMs`, reading whatever preferences are in
+effect at check time) — a row already outside retention can never be repaired by the retention-bounded
+recompute this schedules anyway, so it must never be why a restore triggers one. If any retained row's
 `workoutRecommendationJson` is absent or fails `WorkoutRecommendationCodec.decode` (unrecognized
 `ruleVersion` or invariant violation), it enqueues the same `scheduleResyncWorker(recomputeOnly =
-true)` full-retention recompute used by the ordinary version-gate. This is a coverage check over the
-actual restored data, never a blanket "drop all scoring data and start over," so restoring a
-completely pre-recommendation backup still succeeds immediately and just backfills in the background
-afterward — restore never fails on account of it. A backfill triggered this way converges through the
-same `CURRENT_SCORING_VERSION` marker as the normal upgrade path once the worker's recompute actually
-covers full retained history.
+true)` full-retention recompute used by the ordinary version-gate. This runs **after** preferences
+restore succeeds (or from the failure branch, if preferences restore itself fails) — never before —
+so the retention-bounded check reads the just-restored preferences (scoring zone, retention window)
+rather than risking the worker starting against a pre-restore configuration mid-write. This is a
+coverage check over the actual restored data, never a blanket "drop all scoring data and start over,"
+so restoring a completely pre-recommendation backup still succeeds immediately and just backfills in
+the background afterward — restore never fails on account of it. A backfill triggered this way
+converges through the same `CURRENT_SCORING_VERSION` marker as the normal upgrade path once the
+worker's recompute actually covers full retained history.
 
 **PERF-002/WP-20 — batched TRIMP series in the walk-forward.** The ATL/CTL/strain-ratio/load-score
 assembly for both the workout-only and everyday-HR series is extracted from

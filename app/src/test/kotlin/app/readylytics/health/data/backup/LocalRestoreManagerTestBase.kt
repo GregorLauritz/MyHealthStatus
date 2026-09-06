@@ -89,7 +89,7 @@ abstract class LocalRestoreManagerTestBase {
                 ),
                 encryptionManager,
                 auditTrailRepository,
-                RestoreRecommendationCoverageChecker(db, workerScheduler),
+                RestoreRecommendationCoverageChecker(db, settingsRepo, workerScheduler),
                 Dispatchers.Unconfined,
             )
     }

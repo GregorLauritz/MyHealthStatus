@@ -126,13 +126,6 @@ class LocalRestoreManager
 
             val prefsBackup = readManifestAndStream(zipFile)
 
-            // Task 5: a restored backup may predate workout-recommendation assembly, or -- since
-            // it can be internally inconsistent (e.g. it predates a rule-version bump the restored
-            // scoringVersion doesn't reflect) -- simply carry payloads this build's codec no longer
-            // recognizes. Either way the restored data is still fully valid and must restore
-            // successfully; this only ever *schedules* a local backfill, it never fails the restore.
-            recommendationCoverageChecker.scheduleRecomputeIfIncomplete()
-
             if (prefsBackup != null) {
                 try {
                     restorePrefsApplier.restorePreferences(prefsBackup, providedPassword)
@@ -140,12 +133,28 @@ class LocalRestoreManager
                     throw e
                 } catch (e: Throwable) {
                     logAudit(AuditEvent.Type.RESTORE_FAILED, "prefs_failed: ${e::class.simpleName}")
+                    // Task 5: the database data already committed and is fully valid even though
+                    // preferences restore failed (only settings restoration is being reported as a
+                    // partial failure here), so still check/schedule the recommendation backfill.
+                    recommendationCoverageChecker.scheduleRecomputeIfIncomplete()
                     return RestoreResult.PartialSuccessRequiresRestart(
                         failedStage = RestoreStage.PREFERENCES,
                         cause = e,
                     )
                 }
             }
+
+            // Task 5: a restored backup may predate workout-recommendation assembly, or -- since
+            // it can be internally inconsistent (e.g. it predates a rule-version bump the restored
+            // scoringVersion doesn't reflect) -- simply carry payloads this build's codec no longer
+            // recognizes. Either way the restored data is still fully valid and must restore
+            // successfully; this only ever *schedules* a local backfill, it never fails the restore.
+            // Runs after preferences restore succeeds (or in the catch above if it doesn't) so its
+            // retention-bounded coverage check reads the just-restored preferences, not stale ones
+            // from before restore -- scheduling this before preferences commit could let the worker
+            // start recomputing against a pre-restore scoring zone, retention window, or weight
+            // profile.
+            recommendationCoverageChecker.scheduleRecomputeIfIncomplete()
 
             logAudit(AuditEvent.Type.RESTORE_COMPLETED, "success_requires_restart")
             return RestoreResult.SuccessRequiresRestart
