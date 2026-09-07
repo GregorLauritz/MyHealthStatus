@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_readiness_title">READINESS</string>
+    <string name="widget_sleep_title">SLEEP</string>
+    <string name="widget_strain_title">STRAIN</string>
+    <string name="widget_vitals_title">VITALS</string>
+    <string name="widget_steps_title">STEPS</string>
+    <string name="widget_rhr_title">RHR</string>
+    <string name="widget_hrv_title">HRV</string>
+    <string name="widget_spo2_title">SpO2</string>
+
+    <string name="widget_calibrating_format">Calibrating (%1$d/7)</string>
+    <string name="widget_placeholder_value">--</string>
+    <string name="widget_awaiting_sync">Awaiting sync</string>
+    <string name="widget_deep_rem_format">Deep: %1$d%% • REM: %2$d%%</string>
+    <string name="widget_bpm_format">%1$d bpm</string>
+    <string name="widget_ms_format">%1$d ms</string>
+
+    <string name="widget_recovery_2x2_name">Readylytics Recovery (2x2)</string>
+    <string name="widget_recovery_2x2_desc">Compact Readiness and Sleep recovery scores.</string>
+    <string name="widget_strain_4x2_name">Readylytics Daily Recovery &amp; Strain (4x2)</string>
+    <string name="widget_strain_4x2_desc">Full overview of Readiness, Sleep breakdown, and Strain target.</string>
+    <string name="widget_vitals_4x1_name">Readylytics Vitals Strip (4x1)</string>
+    <string name="widget_vitals_4x1_desc">Quick view of resting heart rate, HRV, SpO2, and step count.</string>
+</resources>
