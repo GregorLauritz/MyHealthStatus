@@ -61,4 +61,20 @@ class WidgetSnapshotSerializerTest {
             val result = WidgetSnapshotSerializer.readFrom(corruptInput)
             assertEquals(WidgetSnapshotSerializer.defaultValue, result)
         }
+
+    @Test
+    fun emptyInput_returnsDefaultSnapshot() =
+        runTest {
+            val emptyInput = ByteArrayInputStream(ByteArray(0))
+            val result = WidgetSnapshotSerializer.readFrom(emptyInput)
+            assertEquals(WidgetSnapshotSerializer.defaultValue, result)
+        }
+
+    @Test
+    fun blankInput_returnsDefaultSnapshot() =
+        runTest {
+            val blankInput = ByteArrayInputStream("   \n\t  ".toByteArray())
+            val result = WidgetSnapshotSerializer.readFrom(blankInput)
+            assertEquals(WidgetSnapshotSerializer.defaultValue, result)
+        }
 }
