@@ -4,8 +4,15 @@ import app.readylytics.health.core.model.data.preferences.UserPreferences
 import app.readylytics.health.core.model.domain.model.DailySummary
 import app.readylytics.health.core.model.domain.preferences.UserPreferencesReader
 import app.readylytics.health.core.model.domain.repository.DailySummaryRepository
+import app.readylytics.health.core.model.domain.util.toMidnightEpochMilli
+import app.readylytics.health.feature.widget.ui.RecoveryGlanceWidget
+import app.readylytics.health.feature.widget.ui.StrainRecoveryWidget
+import app.readylytics.health.feature.widget.ui.VitalsStripWidget
 import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
+import io.mockk.spyk
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
@@ -14,6 +21,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
 import java.time.LocalDate
+import java.time.ZoneId
 
 class WidgetUpdateCoordinatorTest {
     @Test
@@ -39,6 +47,34 @@ class WidgetUpdateCoordinatorTest {
             val snapshot = coordinator.buildLatestSnapshot(today)
             assertNotNull(snapshot)
             assertEquals(80, snapshot.sleepScore)
+        }
+
+    @Test
+    fun buildSnapshot_defaultDateUsesScoringZone() =
+        runTest {
+            val dailySummaryRepo = mockk<DailySummaryRepository>()
+            val prefsReader = mockk<UserPreferencesReader>()
+
+            val tokyoZone = ZoneId.of("Asia/Tokyo")
+            val prefs = UserPreferences(scoringZoneId = tokyoZone.id)
+            val expectedDate = LocalDate.now(tokyoZone)
+            val expectedMidnightMs = expectedDate.toMidnightEpochMilli(tokyoZone)
+            val summary = DailySummary(date = expectedDate, sleepScore = 92f)
+
+            coEvery { dailySummaryRepo.getByDate(expectedMidnightMs) } returns summary
+            coEvery { prefsReader.userPreferences } returns flowOf(prefs)
+
+            val coordinator =
+                WidgetUpdateCoordinator(
+                    context = mockk(relaxed = true),
+                    dailySummaryRepository = dailySummaryRepo,
+                    preferencesReader = prefsReader,
+                )
+
+            val snapshot = coordinator.buildLatestSnapshot()
+            assertNotNull(snapshot)
+            assertEquals(92, snapshot.sleepScore)
+            coVerify(exactly = 1) { dailySummaryRepo.getByDate(expectedMidnightMs) }
         }
 
     @Test
@@ -101,6 +137,87 @@ class WidgetUpdateCoordinatorTest {
                     dailySummaryRepository = dailySummaryRepo,
                     preferencesReader = prefsReader,
                 )
+
+            coordinator.updateAllWidgets()
+        }
+
+    @Test
+    fun updateAllWidgets_whenOneWidgetGroupThrows_continuesUpdatingOtherGroups() =
+        runTest {
+            val dailySummaryRepo = mockk<DailySummaryRepository>()
+            val prefsReader = mockk<UserPreferencesReader>()
+
+            val today = LocalDate.now()
+            val summary = DailySummary(date = today, sleepScore = 80f)
+            val prefs = UserPreferences()
+
+            coEvery { dailySummaryRepo.getByDate(any()) } returns summary
+            coEvery { prefsReader.userPreferences } returns flowOf(prefs)
+
+            val coordinator =
+                spyk(
+                    WidgetUpdateCoordinator(
+                        context = mockk(relaxed = true),
+                        dailySummaryRepository = dailySummaryRepo,
+                        preferencesReader = prefsReader,
+                    ),
+                )
+
+            every { coordinator.createWidgetManager() } returns mockk(relaxed = true)
+
+            coEvery {
+                coordinator.updateWidgetGroup(any(), any<RecoveryGlanceWidget>(), any(), any())
+            } throws RuntimeException("Glance render failed")
+
+            coEvery {
+                coordinator.updateWidgetGroup(any(), any<StrainRecoveryWidget>(), any(), any())
+            } returns 1
+
+            coEvery {
+                coordinator.updateWidgetGroup(any(), any<VitalsStripWidget>(), any(), any())
+            } returns 1
+
+            // Should not throw, and remaining groups should still be updated
+            coordinator.updateAllWidgets()
+
+            coVerify(exactly = 1) {
+                coordinator.updateWidgetGroup(any(), any<RecoveryGlanceWidget>(), any(), any())
+            }
+            coVerify(exactly = 1) {
+                coordinator.updateWidgetGroup(any(), any<StrainRecoveryWidget>(), any(), any())
+            }
+            coVerify(exactly = 1) {
+                coordinator.updateWidgetGroup(any(), any<VitalsStripWidget>(), any(), any())
+            }
+        }
+
+    @Test(expected = CancellationException::class)
+    fun updateAllWidgets_whenWidgetGroupThrowsCancellationException_rethrows() =
+        runTest {
+            val dailySummaryRepo = mockk<DailySummaryRepository>()
+            val prefsReader = mockk<UserPreferencesReader>()
+
+            val today = LocalDate.now()
+            val summary = DailySummary(date = today, sleepScore = 80f)
+            val prefs = UserPreferences()
+
+            coEvery { dailySummaryRepo.getByDate(any()) } returns summary
+            coEvery { prefsReader.userPreferences } returns flowOf(prefs)
+
+            val coordinator =
+                spyk(
+                    WidgetUpdateCoordinator(
+                        context = mockk(relaxed = true),
+                        dailySummaryRepository = dailySummaryRepo,
+                        preferencesReader = prefsReader,
+                    ),
+                )
+
+            every { coordinator.createWidgetManager() } returns mockk(relaxed = true)
+
+            coEvery {
+                coordinator.updateWidgetGroup(any(), any<RecoveryGlanceWidget>(), any(), any())
+            } throws CancellationException("Widget update cancelled")
 
             coordinator.updateAllWidgets()
         }

@@ -8,7 +8,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.text.NumberFormat
 import java.time.LocalDate
+import java.util.Locale
 
 class WidgetSnapshotMapperTest {
     private val testDate = LocalDate.of(2026, 9, 7)
@@ -110,7 +112,8 @@ class WidgetSnapshotMapperTest {
         assertEquals(14.2f, workoutOnlySnapshot.strainScore)
         assertEquals("-2", workoutOnlySnapshot.rhrDeltaFormatted)
         assertEquals("+5", workoutOnlySnapshot.hrvDeltaFormatted)
-        assertEquals("10,450", workoutOnlySnapshot.stepCountFormatted)
+        val expectedStepCount = NumberFormat.getIntegerInstance(Locale.getDefault()).format(10450)
+        assertEquals(expectedStepCount, workoutOnlySnapshot.stepCountFormatted)
         assertEquals("97%", workoutOnlySnapshot.avgSpo2Formatted)
         assertEquals("+0.1°C", workoutOnlySnapshot.skinTempDeltaFormatted)
     }

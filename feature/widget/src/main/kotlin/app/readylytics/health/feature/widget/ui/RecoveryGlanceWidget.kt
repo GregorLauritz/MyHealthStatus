@@ -116,7 +116,11 @@ class RecoveryGlanceWidget : GlanceAppWidget() {
                     StatusChip(
                         text = context.getString(R.string.widget_calibrating_format, snapshot.calibrationDays),
                     )
-                snapshot.readinessCategory != null -> StatusChip(text = snapshot.readinessCategory)
+                snapshot.readinessCategory != null -> {
+                    ReadinessStatusFormatter.format(context, snapshot.readinessCategory)?.let { categoryLabel ->
+                        StatusChip(text = categoryLabel)
+                    }
+                }
             }
         }
     }

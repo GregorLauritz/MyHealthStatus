@@ -9,9 +9,11 @@ import app.readylytics.health.core.healthconnect.domain.sync.HealthSyncUseCase
 import app.readylytics.health.core.model.domain.migration.DatabaseReadiness
 import app.readylytics.health.core.model.domain.migration.DatabaseReadinessInspector
 import app.readylytics.health.core.model.domain.repository.HealthConnectPermissionRevokedException
+import app.readylytics.health.core.model.domain.widget.WidgetUpdatePort
 import app.readylytics.health.core.model.workers.WorkerScheduler
 import dagger.Lazy
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
@@ -32,6 +34,8 @@ class PeriodicHealthSyncWorkerTest {
     private val foregroundSyncController = mockk<ForegroundSyncController>(relaxed = true)
     private val foregroundSyncControllerLazy = mockk<Lazy<ForegroundSyncController>>()
     private val workerScheduler = mockk<WorkerScheduler>(relaxed = true)
+    private val widgetUpdatePort = mockk<WidgetUpdatePort>(relaxed = true)
+    private val widgetUpdatePortLazy = mockk<Lazy<WidgetUpdatePort>>()
 
     @Before
     fun setUp() {
@@ -40,6 +44,7 @@ class PeriodicHealthSyncWorkerTest {
         every { workerParams.taskExecutor } returns mockk(relaxed = true)
         every { healthSyncUseCaseLazy.get() } returns healthSyncUseCase
         every { foregroundSyncControllerLazy.get() } returns foregroundSyncController
+        every { widgetUpdatePortLazy.get() } returns widgetUpdatePort
         every { databaseReadinessGate.inspect() } returns DatabaseReadiness.Ready
     }
 
@@ -57,6 +62,7 @@ class PeriodicHealthSyncWorkerTest {
             verify(exactly = 1) { foregroundSyncControllerLazy.get() }
             verify(exactly = 1) { foregroundSyncController.onBackgroundRecalcStarted() }
             verify(exactly = 1) { foregroundSyncController.onBackgroundRecalcFinished(true) }
+            coVerify(exactly = 1) { widgetUpdatePort.updateAllWidgets() }
         }
 
     @Test
@@ -70,6 +76,7 @@ class PeriodicHealthSyncWorkerTest {
             val result = worker.doWork()
 
             assertEquals(ListenableWorker.Result.retry(), result)
+            coVerify(exactly = 0) { widgetUpdatePort.updateAllWidgets() }
         }
 
     @Test
@@ -119,6 +126,7 @@ class PeriodicHealthSyncWorkerTest {
             assertEquals(ListenableWorker.Result.retry(), result)
             verify(exactly = 0) { healthSyncUseCaseLazy.get() }
             verify(exactly = 0) { foregroundSyncControllerLazy.get() }
+            verify(exactly = 0) { widgetUpdatePortLazy.get() }
         }
 
     private fun createWorker() =
@@ -129,5 +137,6 @@ class PeriodicHealthSyncWorkerTest {
             foregroundSyncController = foregroundSyncControllerLazy,
             workerScheduler = workerScheduler,
             databaseReadinessGate = databaseReadinessGate,
+            widgetUpdatePort = widgetUpdatePortLazy,
         )
 }

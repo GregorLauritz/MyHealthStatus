@@ -12,6 +12,7 @@ import app.readylytics.health.core.model.domain.migration.DatabaseReadiness
 import app.readylytics.health.core.model.domain.migration.DatabaseReadinessInspector
 import app.readylytics.health.core.model.domain.repository.HealthConnectPermissionRevokedException
 import app.readylytics.health.core.model.domain.util.logE
+import app.readylytics.health.core.model.domain.widget.WidgetUpdatePort
 import app.readylytics.health.core.model.workers.WorkerScheduler
 import dagger.Lazy
 import dagger.assisted.Assisted
@@ -39,6 +40,7 @@ class PeriodicHealthSyncWorker
         private val foregroundSyncController: Lazy<ForegroundSyncController>,
         private val workerScheduler: WorkerScheduler,
         private val databaseReadinessGate: DatabaseReadinessInspector,
+        private val widgetUpdatePort: Lazy<WidgetUpdatePort>,
     ) : CoroutineWorker(appContext, params) {
         @SuppressLint("MissingPermission")
         override suspend fun doWork(): Result {
@@ -63,6 +65,7 @@ class PeriodicHealthSyncWorker
                 when {
                     result.isSuccess -> {
                         success = true
+                        widgetUpdatePort.get().updateAllWidgets()
                         Result.success()
                     }
                     result is DomainResult.Failure &&

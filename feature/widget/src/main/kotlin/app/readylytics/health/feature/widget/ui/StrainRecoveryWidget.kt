@@ -153,7 +153,11 @@ class StrainRecoveryWidget : GlanceAppWidget() {
                             snapshot.calibrationDays,
                         ),
                 )
-            snapshot.readinessCategory != null -> StatusChip(text = snapshot.readinessCategory)
+            snapshot.readinessCategory != null -> {
+                ReadinessStatusFormatter.format(context, snapshot.readinessCategory)?.let { categoryLabel ->
+                    StatusChip(text = categoryLabel)
+                }
+            }
         }
     }
 

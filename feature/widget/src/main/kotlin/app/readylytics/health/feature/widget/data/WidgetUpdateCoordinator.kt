@@ -22,29 +22,35 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class WidgetUpdateCoordinator
+open class WidgetUpdateCoordinator
     @Inject
     constructor(
         @ApplicationContext private val context: Context,
         private val dailySummaryRepository: DailySummaryRepository,
         private val preferencesReader: UserPreferencesReader,
     ) : WidgetUpdatePort {
-        suspend fun buildLatestSnapshot(date: LocalDate = LocalDate.now()): WidgetSnapshot {
+        suspend fun buildLatestSnapshot(date: LocalDate? = null): WidgetSnapshot {
             val prefs = preferencesReader.userPreferences.first()
-            val dateMidnightMs = date.toMidnightEpochMilli(prefs.scoringZone())
+            val targetDate = date ?: LocalDate.now(prefs.scoringZone())
+            val dateMidnightMs = targetDate.toMidnightEpochMilli(prefs.scoringZone())
             val summary = dailySummaryRepository.getByDate(dateMidnightMs)
-            return WidgetSnapshotMapper.map(summary, prefs, date)
+            return WidgetSnapshotMapper.map(summary, prefs, targetDate)
         }
 
         override suspend fun updateAllWidgets() {
             try {
                 val snapshot = buildLatestSnapshot()
-                val manager = GlanceAppWidgetManager(context)
+                val manager = createWidgetManager()
 
                 val updatedCount =
-                    updateWidgetGroup(manager, RecoveryGlanceWidget(), RecoveryGlanceWidget::class.java, snapshot) +
-                        updateWidgetGroup(manager, StrainRecoveryWidget(), StrainRecoveryWidget::class.java, snapshot) +
-                        updateWidgetGroup(manager, VitalsStripWidget(), VitalsStripWidget::class.java, snapshot)
+                    safeUpdateWidgetGroup(manager, RecoveryGlanceWidget(), RecoveryGlanceWidget::class.java, snapshot) +
+                        safeUpdateWidgetGroup(
+                            manager,
+                            StrainRecoveryWidget(),
+                            StrainRecoveryWidget::class.java,
+                            snapshot,
+                        ) +
+                        safeUpdateWidgetGroup(manager, VitalsStripWidget(), VitalsStripWidget::class.java, snapshot)
 
                 logI(TAG) { "Pushed WidgetSnapshot to $updatedCount widgets" }
             } catch (e: CancellationException) {
@@ -54,7 +60,22 @@ class WidgetUpdateCoordinator
             }
         }
 
-        private suspend fun updateWidgetGroup(
+        internal open fun createWidgetManager(): GlanceAppWidgetManager = GlanceAppWidgetManager(context)
+
+        private suspend fun safeUpdateWidgetGroup(
+            manager: GlanceAppWidgetManager,
+            widget: GlanceAppWidget,
+            widgetClass: Class<out GlanceAppWidget>,
+            snapshot: WidgetSnapshot,
+        ): Int =
+            runCatching {
+                updateWidgetGroup(manager, widget, widgetClass, snapshot)
+            }.onFailure { e ->
+                if (e is CancellationException) throw e
+                logE(TAG, e) { "Failed to update widget group ${widgetClass.simpleName}" }
+            }.getOrDefault(0)
+
+        internal open suspend fun updateWidgetGroup(
             manager: GlanceAppWidgetManager,
             widget: GlanceAppWidget,
             widgetClass: Class<out GlanceAppWidget>,
