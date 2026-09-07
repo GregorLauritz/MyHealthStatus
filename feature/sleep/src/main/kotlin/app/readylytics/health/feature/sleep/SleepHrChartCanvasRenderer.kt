@@ -54,18 +54,27 @@ private fun DrawScope.drawSleepHrTrendLine(
 ) {
     clipRect(left = plotRect.left, top = plotRect.top, right = plotRect.right, bottom = plotRect.bottom) {
         for (segment in trendSegments) {
-            if (segment.size < 2) continue
-            val path = Path()
-            segment.forEachIndexed { i, point ->
-                val x = zoomedX(point.timestampMs)
-                val y = trendToY(point.avgBpm)
-                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            if (segment.isEmpty()) continue
+            if (segment.size == 1) {
+                val point = segment[0]
+                drawCircle(
+                    color = trendColor,
+                    radius = 3.dp.toPx(),
+                    center = Offset(zoomedX(point.timestampMs), trendToY(point.avgBpm)),
+                )
+            } else {
+                val path = Path()
+                segment.forEachIndexed { i, point ->
+                    val x = zoomedX(point.timestampMs)
+                    val y = trendToY(point.avgBpm)
+                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                }
+                drawPath(
+                    path = path,
+                    color = trendColor,
+                    style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+                )
             }
-            drawPath(
-                path = path,
-                color = trendColor,
-                style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
-            )
         }
     }
 }

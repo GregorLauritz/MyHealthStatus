@@ -81,4 +81,16 @@ class SleepHrChartHelperTest {
     fun `trend line of empty input is empty`() {
         assertEquals(emptyList<SleepHrTrendPoint>(), SleepHrChartHelper.computeTrendLine(emptyList(), windowMs = 1L))
     }
+
+    @Test
+    fun `computeTrendLine - single sample produces single-point segment`() {
+        val singleSample =
+            listOf(
+                sample(timestampMs = 1000L, bpm = 72),
+            )
+        val trend = SleepHrChartHelper.computeTrendLine(singleSample, windowMs = 900_000L)
+        assertEquals(1, trend.size)
+        assertEquals(1000L, trend[0].timestampMs)
+        assertEquals(72f, trend[0].avgBpm)
+    }
 }
