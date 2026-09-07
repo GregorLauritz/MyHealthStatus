@@ -1,5 +1,6 @@
 package app.readylytics.health.feature.widget.data
 
+import app.readylytics.health.core.model.domain.model.DailyMetricsMapper
 import app.readylytics.health.core.model.domain.model.DailySummary
 import app.readylytics.health.core.model.domain.preferences.UserPreferences
 import app.readylytics.health.core.model.domain.scoring.LoadSourceMode
@@ -15,7 +16,6 @@ object WidgetSnapshotMapper {
     private const val READINESS_FAIR_THRESHOLD = 40
     private const val READINESS_MAX_SCORE = 100
     private const val MINUTES_PER_HOUR = 60
-    private const val BASELINE_BODY_TEMP_CELSIUS = 36.5f
     private const val DEFAULT_STRAIN_TARGET = "10 - 14"
 
     fun map(
@@ -33,16 +33,18 @@ object WidgetSnapshotMapper {
         val sleepDurationFormatted = formatSleepDuration(summary.sleepDurationMinutes)
         val strainScore = resolveStrainScore(summary, prefs)
 
+        val rhrBaseline = DailyMetricsMapper.rhrBaselineRounded(summary, prefs)
         val rhrDeltaFormatted =
             computeDeltaString(
-                current = summary.restingHeartRate?.toDouble(),
-                baseline = summary.rhrBpm?.toDouble(),
+                current = summary.restingHeartRate,
+                baseline = rhrBaseline,
             )
 
+        val hrvBaseline = DailyMetricsMapper.hrvBaselineRounded(summary, prefs)
         val hrvDeltaFormatted =
             computeDeltaString(
-                current = summary.nocturnalHrv?.toDouble(),
-                baseline = summary.hrvMuMssd?.toDouble(),
+                current = summary.nocturnalHrv,
+                baseline = hrvBaseline,
             )
 
         return WidgetSnapshot(
@@ -64,10 +66,7 @@ object WidgetSnapshotMapper {
             nocturnalHrv = summary.nocturnalHrv,
             hrvDeltaFormatted = hrvDeltaFormatted,
             avgSpo2Formatted = summary.avgSleepingSpo2?.let { "${it.roundToInt()}%" },
-            skinTempDeltaFormatted =
-                summary.avgSleepingBodyTemp?.let {
-                    String.format(Locale.US, "%+.1f°C", it - BASELINE_BODY_TEMP_CELSIUS)
-                },
+            skinTempDeltaFormatted = null,
         )
     }
 
@@ -116,11 +115,11 @@ object WidgetSnapshotMapper {
         }
 
     private fun computeDeltaString(
-        current: Double?,
-        baseline: Double?,
+        current: Int?,
+        baseline: Int?,
     ): String? {
         if (current == null || baseline == null) return null
-        val diff = (current - baseline).roundToInt()
+        val diff = current - baseline
         return if (diff > 0) "+$diff" else "$diff"
     }
 }

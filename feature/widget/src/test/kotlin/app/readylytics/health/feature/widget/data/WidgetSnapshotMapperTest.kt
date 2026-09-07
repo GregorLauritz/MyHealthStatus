@@ -11,6 +11,7 @@ import org.junit.Test
 import java.text.NumberFormat
 import java.time.LocalDate
 import java.util.Locale
+import kotlin.math.ln
 
 class WidgetSnapshotMapperTest {
     private val testDate = LocalDate.of(2026, 9, 7)
@@ -90,8 +91,9 @@ class WidgetSnapshotMapperTest {
                 stepCount = 10450,
                 restingHeartRate = 56,
                 rhrBpm = 58f,
+                baselineCalculatedAtDate = testDate,
                 nocturnalHrv = 65,
-                hrvMuMssd = 60f,
+                hrvMuMssd = ln(60.0).toFloat(),
                 avgSleepingSpo2 = 97.4f,
                 avgSleepingBodyTemp = 36.6f,
             )
@@ -115,7 +117,7 @@ class WidgetSnapshotMapperTest {
         val expectedStepCount = NumberFormat.getIntegerInstance(Locale.getDefault()).format(10450)
         assertEquals(expectedStepCount, workoutOnlySnapshot.stepCountFormatted)
         assertEquals("97%", workoutOnlySnapshot.avgSpo2Formatted)
-        assertEquals("+0.1°C", workoutOnlySnapshot.skinTempDeltaFormatted)
+        assertNull(workoutOnlySnapshot.skinTempDeltaFormatted)
     }
 
     @Test
@@ -259,8 +261,9 @@ class WidgetSnapshotMapperTest {
                 date = testDate,
                 restingHeartRate = 60,
                 rhrBpm = 60f,
+                baselineCalculatedAtDate = testDate,
                 nocturnalHrv = 55,
-                hrvMuMssd = 55f,
+                hrvMuMssd = ln(55.0).toFloat(),
             )
         val snapshot =
             WidgetSnapshotMapper.map(
@@ -279,6 +282,7 @@ class WidgetSnapshotMapperTest {
                 date = testDate,
                 restingHeartRate = null,
                 rhrBpm = 60f,
+                baselineCalculatedAtDate = testDate,
                 nocturnalHrv = 55,
                 hrvMuMssd = null,
             )
@@ -290,5 +294,31 @@ class WidgetSnapshotMapperTest {
             )
         assertNull(snapshot.rhrDeltaFormatted)
         assertNull(snapshot.hrvDeltaFormatted)
+    }
+
+    @Test
+    fun deltas_userScenario_calculatesLinearHrvDeltaAndIgnoresTemp() {
+        // User scenario: nocturnalHrv = 45, baseline hrv = 42 (hrvMuMssd = ln(42)), rhr = 46, baseline rhr = 47
+        val summary =
+            DailySummary(
+                date = testDate,
+                restingHeartRate = 46,
+                rhrBpm = 47f,
+                baselineCalculatedAtDate = testDate,
+                nocturnalHrv = 45,
+                hrvMuMssd = ln(42.0).toFloat(),
+                avgSleepingSpo2 = 99.2f,
+                avgSleepingBodyTemp = 34.2f,
+            )
+        val snapshot =
+            WidgetSnapshotMapper.map(
+                summary = summary,
+                prefs = UserPreferences(),
+                date = testDate,
+            )
+        assertEquals("-1", snapshot.rhrDeltaFormatted)
+        assertEquals("+3", snapshot.hrvDeltaFormatted)
+        assertEquals("99%", snapshot.avgSpo2Formatted)
+        assertNull(snapshot.skinTempDeltaFormatted)
     }
 }

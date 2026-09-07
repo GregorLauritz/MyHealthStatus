@@ -106,7 +106,7 @@ class VitalsStripWidget : GlanceAppWidget() {
             VitalsCell(
                 label = context.getString(R.string.widget_spo2_title),
                 value = snapshot.avgSpo2Formatted ?: context.getString(R.string.widget_placeholder_value),
-                delta = snapshot.skinTempDeltaFormatted,
+                delta = null,
                 onClick = actionStartActivity(vitalsIntent),
                 modifier = GlanceModifier.defaultWeight(),
             )
