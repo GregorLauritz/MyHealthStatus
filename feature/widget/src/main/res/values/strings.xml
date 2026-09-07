@@ -16,6 +16,10 @@
     <string name="widget_bpm_format">%1$d bpm</string>
     <string name="widget_ms_format">%1$d ms</string>
     <string name="widget_steps_format">%1$s steps</string>
+    <string name="widget_status_peak">Peak</string>
+    <string name="widget_status_maintain">Maintain</string>
+    <string name="widget_status_caution">Caution</string>
+    <string name="widget_status_high_fatigue">High Fatigue</string>
     <string name="widget_status_optimal">Optimal</string>
     <string name="widget_status_good">Good</string>
     <string name="widget_status_fair">Fair</string>

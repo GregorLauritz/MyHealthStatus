@@ -11,9 +11,9 @@ import kotlin.math.roundToInt
 
 object WidgetSnapshotMapper {
     private const val CALIBRATION_TOTAL_DAYS = 7
-    private const val READINESS_OPTIMAL_THRESHOLD = 80
-    private const val READINESS_GOOD_THRESHOLD = 60
-    private const val READINESS_FAIR_THRESHOLD = 40
+    private const val READINESS_PEAK_THRESHOLD = 85
+    private const val READINESS_MAINTAIN_THRESHOLD = 60
+    private const val READINESS_CAUTION_THRESHOLD = 30
     private const val READINESS_MAX_SCORE = 100
     private const val MINUTES_PER_HOUR = 60
     private const val DEFAULT_STRAIN_TARGET = "10 - 14"
@@ -90,10 +90,10 @@ object WidgetSnapshotMapper {
             when {
                 isCalibrating -> null
                 readinessScore == null -> null
-                readinessScore >= READINESS_OPTIMAL_THRESHOLD -> "Optimal"
-                readinessScore >= READINESS_GOOD_THRESHOLD -> "Good"
-                readinessScore >= READINESS_FAIR_THRESHOLD -> "Fair"
-                else -> "Low"
+                readinessScore >= READINESS_PEAK_THRESHOLD -> "Peak"
+                readinessScore >= READINESS_MAINTAIN_THRESHOLD -> "Maintain"
+                readinessScore >= READINESS_CAUTION_THRESHOLD -> "Caution"
+                else -> "High Fatigue"
             }
         return Pair(readinessScore, readinessCategory)
     }

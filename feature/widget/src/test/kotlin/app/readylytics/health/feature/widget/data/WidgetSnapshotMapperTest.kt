@@ -106,7 +106,7 @@ class WidgetSnapshotMapperTest {
         assertTrue(workoutOnlySnapshot.hasData)
         assertFalse(workoutOnlySnapshot.isCalibrating)
         assertEquals(88, workoutOnlySnapshot.readinessScore)
-        assertEquals("Optimal", workoutOnlySnapshot.readinessCategory)
+        assertEquals("Peak", workoutOnlySnapshot.readinessCategory)
         assertEquals(85, workoutOnlySnapshot.sleepScore)
         assertEquals("7h 42m", workoutOnlySnapshot.sleepDurationFormatted)
         assertEquals(19, workoutOnlySnapshot.deepSleepPercent)
@@ -138,7 +138,7 @@ class WidgetSnapshotMapperTest {
                 date = testDate,
             )
         assertEquals(79, everydaySnapshot.readinessScore)
-        assertEquals("Good", everydaySnapshot.readinessCategory)
+        assertEquals("Maintain", everydaySnapshot.readinessCategory)
         assertEquals(18.5f, everydaySnapshot.strainScore)
     }
 
@@ -160,7 +160,7 @@ class WidgetSnapshotMapperTest {
                 date = testDate,
             )
         assertEquals(84, snapshot.readinessScore)
-        assertEquals("Optimal", snapshot.readinessCategory)
+        assertEquals("Maintain", snapshot.readinessCategory)
         assertEquals(12.3f, snapshot.strainScore)
     }
 
@@ -168,14 +168,14 @@ class WidgetSnapshotMapperTest {
     fun readinessCategory_mapsScoreTiersCorrectly() {
         val cases =
             listOf(
-                90f to "Optimal",
-                80f to "Optimal",
-                79f to "Good",
-                60f to "Good",
-                59f to "Fair",
-                40f to "Fair",
-                39f to "Low",
-                0f to "Low",
+                90f to "Peak",
+                85f to "Peak",
+                84f to "Maintain",
+                60f to "Maintain",
+                59f to "Caution",
+                30f to "Caution",
+                29f to "High Fatigue",
+                0f to "High Fatigue",
             )
         for ((score, expectedCategory) in cases) {
             val summary =
@@ -302,6 +302,7 @@ class WidgetSnapshotMapperTest {
         val summary =
             DailySummary(
                 date = testDate,
+                readinessWorkoutOnly = 82f,
                 restingHeartRate = 46,
                 rhrBpm = 47f,
                 baselineCalculatedAtDate = testDate,
@@ -316,6 +317,8 @@ class WidgetSnapshotMapperTest {
                 prefs = UserPreferences(),
                 date = testDate,
             )
+        assertEquals(82, snapshot.readinessScore)
+        assertEquals("Maintain", snapshot.readinessCategory)
         assertEquals("-1", snapshot.rhrDeltaFormatted)
         assertEquals("+3", snapshot.hrvDeltaFormatted)
         assertEquals("99%", snapshot.avgSpo2Formatted)

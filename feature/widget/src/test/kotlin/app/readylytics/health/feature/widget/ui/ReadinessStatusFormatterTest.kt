@@ -11,8 +11,12 @@ import org.junit.Test
 class ReadinessStatusFormatterTest {
     @Test
     fun resolveStringRes_mapsKnownCategoriesCorrectly() {
+        assertEquals(R.string.widget_status_peak, ReadinessStatusFormatter.resolveStringRes("Peak"))
+        assertEquals(R.string.widget_status_peak, ReadinessStatusFormatter.resolveStringRes("peak"))
+        assertEquals(R.string.widget_status_maintain, ReadinessStatusFormatter.resolveStringRes("Maintain"))
+        assertEquals(R.string.widget_status_caution, ReadinessStatusFormatter.resolveStringRes("Caution"))
+        assertEquals(R.string.widget_status_high_fatigue, ReadinessStatusFormatter.resolveStringRes("High Fatigue"))
         assertEquals(R.string.widget_status_optimal, ReadinessStatusFormatter.resolveStringRes("Optimal"))
-        assertEquals(R.string.widget_status_optimal, ReadinessStatusFormatter.resolveStringRes("optimal"))
         assertEquals(R.string.widget_status_good, ReadinessStatusFormatter.resolveStringRes("Good"))
         assertEquals(R.string.widget_status_fair, ReadinessStatusFormatter.resolveStringRes("Fair"))
         assertEquals(R.string.widget_status_low, ReadinessStatusFormatter.resolveStringRes("Low"))

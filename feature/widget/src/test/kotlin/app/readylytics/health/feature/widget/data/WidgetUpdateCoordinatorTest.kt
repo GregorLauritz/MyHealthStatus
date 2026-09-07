@@ -10,7 +10,6 @@ import app.readylytics.health.feature.widget.ui.StrainRecoveryWidget
 import app.readylytics.health.feature.widget.ui.VitalsStripWidget
 import io.mockk.coEvery
 import io.mockk.coVerify
-import io.mockk.every
 import io.mockk.mockk
 import io.mockk.spyk
 import kotlinx.coroutines.CancellationException
@@ -163,19 +162,18 @@ class WidgetUpdateCoordinatorTest {
                     ),
                 )
 
-            every { coordinator.createWidgetManager() } returns mockk(relaxed = true)
             coEvery { coordinator.persistSnapshot(any()) } returns Unit
 
             coEvery {
-                coordinator.updateWidgetGroup(any(), any<RecoveryGlanceWidget>(), any(), any())
+                coordinator.updateWidgetGroup(any<RecoveryGlanceWidget>(), any(), any())
             } throws RuntimeException("Glance render failed")
 
             coEvery {
-                coordinator.updateWidgetGroup(any(), any<StrainRecoveryWidget>(), any(), any())
+                coordinator.updateWidgetGroup(any<StrainRecoveryWidget>(), any(), any())
             } returns 1
 
             coEvery {
-                coordinator.updateWidgetGroup(any(), any<VitalsStripWidget>(), any(), any())
+                coordinator.updateWidgetGroup(any<VitalsStripWidget>(), any(), any())
             } returns 1
 
             // Should not throw, and remaining groups should still be updated
@@ -183,13 +181,13 @@ class WidgetUpdateCoordinatorTest {
 
             coVerify(exactly = 1) { coordinator.persistSnapshot(any()) }
             coVerify(exactly = 1) {
-                coordinator.updateWidgetGroup(any(), any<RecoveryGlanceWidget>(), any(), any())
+                coordinator.updateWidgetGroup(any<RecoveryGlanceWidget>(), any(), any())
             }
             coVerify(exactly = 1) {
-                coordinator.updateWidgetGroup(any(), any<StrainRecoveryWidget>(), any(), any())
+                coordinator.updateWidgetGroup(any<StrainRecoveryWidget>(), any(), any())
             }
             coVerify(exactly = 1) {
-                coordinator.updateWidgetGroup(any(), any<VitalsStripWidget>(), any(), any())
+                coordinator.updateWidgetGroup(any<VitalsStripWidget>(), any(), any())
             }
         }
 
@@ -215,11 +213,10 @@ class WidgetUpdateCoordinatorTest {
                     ),
                 )
 
-            every { coordinator.createWidgetManager() } returns mockk(relaxed = true)
             coEvery { coordinator.persistSnapshot(any()) } returns Unit
 
             coEvery {
-                coordinator.updateWidgetGroup(any(), any<RecoveryGlanceWidget>(), any(), any())
+                coordinator.updateWidgetGroup(any<RecoveryGlanceWidget>(), any(), any())
             } throws CancellationException("Widget update cancelled")
 
             coordinator.updateAllWidgets()
@@ -247,12 +244,12 @@ class WidgetUpdateCoordinatorTest {
                     ),
                 )
 
-            val mockManager = mockk<androidx.glance.appwidget.GlanceAppWidgetManager>(relaxed = true)
-            every { coordinator.createWidgetManager() } returns mockManager
             coEvery { coordinator.persistSnapshot(any()) } returns Unit
+            coEvery { coordinator.updateWidgetGroup(any(), any(), any()) } returns 0
 
             coordinator.updateAllWidgets()
 
             coVerify(exactly = 1) { coordinator.persistSnapshot(match { it.sleepScore == 85 }) }
+            coVerify(exactly = 3) { coordinator.updateWidgetGroup(any(), any(), any()) }
         }
 }

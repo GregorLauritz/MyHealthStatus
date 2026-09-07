@@ -1,6 +1,7 @@
 package app.readylytics.health.feature.widget.data
 
 import android.content.Context
+import androidx.glance.GlanceId
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.state.updateAppWidgetState
@@ -41,17 +42,15 @@ open class WidgetUpdateCoordinator
             try {
                 val snapshot = buildLatestSnapshot()
                 persistSnapshot(snapshot)
-                val manager = createWidgetManager()
 
                 val updatedCount =
-                    safeUpdateWidgetGroup(manager, RecoveryGlanceWidget(), RecoveryGlanceWidget::class.java, snapshot) +
+                    safeUpdateWidgetGroup(RecoveryGlanceWidget(), RecoveryGlanceWidget::class.java, snapshot) +
                         safeUpdateWidgetGroup(
-                            manager,
                             StrainRecoveryWidget(),
                             StrainRecoveryWidget::class.java,
                             snapshot,
                         ) +
-                        safeUpdateWidgetGroup(manager, VitalsStripWidget(), VitalsStripWidget::class.java, snapshot)
+                        safeUpdateWidgetGroup(VitalsStripWidget(), VitalsStripWidget::class.java, snapshot)
 
                 logI(TAG) { "Pushed WidgetSnapshot to $updatedCount widgets" }
             } catch (e: CancellationException) {
@@ -65,34 +64,33 @@ open class WidgetUpdateCoordinator
             WidgetSnapshotDefinition.getDataStore(context, "").updateData { snapshot }
         }
 
-        internal open fun createWidgetManager(): GlanceAppWidgetManager = GlanceAppWidgetManager(context)
-
         private suspend fun safeUpdateWidgetGroup(
-            manager: GlanceAppWidgetManager,
             widget: GlanceAppWidget,
             widgetClass: Class<out GlanceAppWidget>,
             snapshot: WidgetSnapshot,
         ): Int =
             runCatching {
-                updateWidgetGroup(manager, widget, widgetClass, snapshot)
+                updateWidgetGroup(widget, widgetClass, snapshot)
             }.onFailure { e ->
                 if (e is CancellationException) throw e
                 logE(TAG, e) { "Failed to update widget group ${widgetClass.simpleName}" }
             }.getOrDefault(0)
 
         internal open suspend fun updateWidgetGroup(
-            manager: GlanceAppWidgetManager,
             widget: GlanceAppWidget,
             widgetClass: Class<out GlanceAppWidget>,
             snapshot: WidgetSnapshot,
         ): Int {
-            val ids = manager.getGlanceIds(widgetClass)
+            val ids = getGlanceIds(widgetClass)
             ids.forEach { id ->
                 updateAppWidgetState(context, WidgetSnapshotDefinition, id) { snapshot }
                 widget.update(context, id)
             }
             return ids.size
         }
+
+        internal open suspend fun getGlanceIds(widgetClass: Class<out GlanceAppWidget>): List<GlanceId> =
+            GlanceAppWidgetManager(context).getGlanceIds(widgetClass)
 
         companion object {
             private const val TAG = "WidgetUpdateCoordinator"

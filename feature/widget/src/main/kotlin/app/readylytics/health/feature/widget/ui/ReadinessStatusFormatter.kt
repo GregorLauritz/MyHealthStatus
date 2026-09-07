@@ -9,6 +9,10 @@ object ReadinessStatusFormatter {
     @StringRes
     fun resolveStringRes(category: String?): Int? =
         when (category?.lowercase(Locale.ROOT)) {
+            "peak" -> R.string.widget_status_peak
+            "maintain" -> R.string.widget_status_maintain
+            "caution" -> R.string.widget_status_caution
+            "high fatigue" -> R.string.widget_status_high_fatigue
             "optimal" -> R.string.widget_status_optimal
             "good" -> R.string.widget_status_good
             "fair" -> R.string.widget_status_fair
