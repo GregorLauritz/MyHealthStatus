@@ -1,6 +1,9 @@
 package app.readylytics.health.ui.scaffold
 
 import android.content.Context
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DirectionsRun
+import androidx.compose.material.icons.filled.SportsScore
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.readylytics.health.R
@@ -147,6 +150,22 @@ class WorkoutRecommendationCardContentTest {
 
         val expectedRunLabel = context.getString(WorkoutLayoutTypeMapper.fromExerciseType("RUNNING").displayNameResId)
         assertEquals(expectedRunLabel, presentation.examples[0].typeLabel)
+        assertEquals(Icons.AutoMirrored.Filled.DirectionsRun, presentation.examples[0].activityIcon)
+    }
+
+    @Test
+    fun unknownActivityUsesTheGenericActivityIcon() {
+        val snapshot =
+            WorkoutRecommendationSnapshot(
+                wakeSessionId = "sleep-1",
+                wakeTimeMs = 1_000L,
+                decision = WorkoutRecommendationDecision(WorkoutRecommendationState.EASY),
+                examples = listOf(example(exerciseType = "unknown-activity")),
+            )
+
+        val presentation = buildWorkoutRecommendationPresentation(snapshot, context)
+
+        assertEquals(Icons.Filled.SportsScore, presentation.examples.single().activityIcon)
     }
 
     @Test

@@ -16,6 +16,7 @@ import app.readylytics.health.feature.dashboard.recommendation.WorkoutRecommenda
 import app.readylytics.health.feature.dashboard.recommendation.WorkoutRecommendationExamplePresentation
 import app.readylytics.health.feature.dashboard.recommendation.WorkoutRecommendationPresentation
 import app.readylytics.health.feature.workouts.displayNameResId
+import app.readylytics.health.feature.workouts.icon
 import kotlin.math.roundToInt
 
 /**
@@ -140,7 +141,8 @@ private fun reasonText(
 private fun WorkoutRecommendationExample.toPresentation(context: Context): WorkoutRecommendationExamplePresentation {
     // Reuses the shared workout-type-label helper/resources (feature/workouts) rather than
     // duplicating type-label strings here.
-    val typeLabel = context.getString(WorkoutLayoutTypeMapper.fromExerciseType(exerciseType).displayNameResId)
+    val layoutType = WorkoutLayoutTypeMapper.fromExerciseType(exerciseType)
+    val typeLabel = context.getString(layoutType.displayNameResId)
     val recordedSessionDescription =
         averageHr?.let { hr ->
             context.getString(
@@ -155,5 +157,6 @@ private fun WorkoutRecommendationExample.toPresentation(context: Context): Worko
         typeLabel = typeLabel,
         recordedSessionDescription = recordedSessionDescription,
         openWorkoutLabel = openWorkoutLabel,
+        activityIcon = layoutType.icon,
     )
 }

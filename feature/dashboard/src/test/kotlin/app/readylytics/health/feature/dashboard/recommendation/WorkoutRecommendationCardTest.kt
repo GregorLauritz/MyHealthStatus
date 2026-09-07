@@ -3,12 +3,17 @@ package app.readylytics.health.feature.dashboard.recommendation
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Rule
@@ -87,7 +92,31 @@ class WorkoutRecommendationCardTest {
     }
 
     @Test
+    fun infoActionAllocatesAnAccessibleTouchTarget() {
+        composeRule.setContent {
+            MaterialTheme { WorkoutRecommendationCard(presentation()) {} }
+        }
+
+        composeRule
+            .onNodeWithContentDescription("More information")
+            .assertWidthIsAtLeast(48.dp)
+            .assertHeightIsAtLeast(48.dp)
+    }
+
+    @Test
+    fun absentSupportingTextDoesNotLeaveEmptySemantics() {
+        val text = presentation(explanation = "", examples = listOf(example(recordedSessionDescription = "")))
+        composeRule.setContent {
+            MaterialTheme { WorkoutRecommendationCard(text) {} }
+        }
+
+        composeRule.onNodeWithText("", useUnmergedTree = true).assertDoesNotExist()
+        composeRule.onNodeWithText("Run").assertHasClickAction().assertHeightIsAtLeast(48.dp)
+    }
+
+    @Test
     fun rendersUpToThreeExamples() {
+        val clicked = mutableListOf<String>()
         val text =
             presentation(
                 examples =
@@ -98,12 +127,18 @@ class WorkoutRecommendationCardTest {
                     ),
             )
         composeRule.setContent {
-            MaterialTheme { WorkoutRecommendationCard(text) {} }
+            MaterialTheme { WorkoutRecommendationCard(text) { clicked += it } }
         }
 
         composeRule.onNodeWithText("Run").assertIsDisplayed()
         composeRule.onNodeWithText("Cycling").assertIsDisplayed()
         composeRule.onNodeWithText("Swim").assertIsDisplayed()
+        composeRule.onNodeWithText("Run").performClick()
+        composeRule.onNodeWithText("Cycling").performClick()
+        composeRule.onNodeWithText("Swim").performClick()
+        assertEquals(listOf("run-1", "ride-1", "swim-1"), clicked)
+        // Three workout actions plus info; decorative affordances must not add actions.
+        composeRule.onAllNodes(hasClickAction()).assertCountEquals(4)
     }
 
     @Test
