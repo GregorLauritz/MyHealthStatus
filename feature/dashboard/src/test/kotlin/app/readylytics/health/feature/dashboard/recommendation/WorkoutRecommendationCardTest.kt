@@ -6,6 +6,7 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import org.junit.Assert.assertEquals
@@ -34,9 +35,8 @@ class WorkoutRecommendationCardTest {
         category: String = "Easy workout",
         explanation: String = "Low HRV",
         info: String = "Info",
-        infoToggleLabel: String = "About guidance",
         examples: List<WorkoutRecommendationExamplePresentation> = emptyList(),
-    ) = WorkoutRecommendationPresentation(title, category, explanation, info, infoToggleLabel, examples)
+    ) = WorkoutRecommendationPresentation(title, category, explanation, info, examples)
 
     @Test
     fun exampleOpensItsStableId() {
@@ -48,7 +48,6 @@ class WorkoutRecommendationCardTest {
                 "Easy workout",
                 "Low HRV",
                 "Info",
-                "About guidance",
                 listOf(row),
             )
         composeRule.setContent {
@@ -77,18 +76,14 @@ class WorkoutRecommendationCardTest {
     }
 
     @Test
-    fun infoTogglePlaysExpandsAndCollapsesTheInfoText() {
-        val text =
-            presentation(info = "Detailed explanation of the guidance rules.", infoToggleLabel = "About guidance")
+    fun informationToggleShowsTheInfoText() {
+        val text = presentation(info = "Detailed explanation of the guidance rules.")
         composeRule.setContent {
             MaterialTheme { WorkoutRecommendationCard(text) {} }
         }
 
-        composeRule.onNodeWithText("About guidance").performClick()
+        composeRule.onNodeWithContentDescription("More information").performClick()
         composeRule.onNodeWithText("Detailed explanation of the guidance rules.").assertIsDisplayed()
-
-        composeRule.onNodeWithText("About guidance").performClick()
-        composeRule.onNodeWithText("Detailed explanation of the guidance rules.").assertDoesNotExist()
     }
 
     @Test

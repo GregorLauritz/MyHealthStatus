@@ -58,7 +58,6 @@ internal fun buildWorkoutRecommendationPresentation(
     context: Context,
 ): WorkoutRecommendationPresentation {
     val title = context.getString(R.string.card_title_workout_recommendation)
-    val infoToggleLabel = context.getString(R.string.workout_recommendation_info_toggle_label)
     val info = context.getString(R.string.workout_recommendation_info_body)
 
     if (snapshot == null) {
@@ -67,7 +66,6 @@ internal fun buildWorkoutRecommendationPresentation(
             category = context.getString(R.string.workout_recommendation_category_not_calculated),
             explanation = context.getString(R.string.workout_recommendation_explanation_not_calculated),
             info = info,
-            infoToggleLabel = infoToggleLabel,
             examples = emptyList(),
         )
     }
@@ -78,7 +76,6 @@ internal fun buildWorkoutRecommendationPresentation(
         category = categoryFor(decision.state, context),
         explanation = explanationFor(decision, context),
         info = info,
-        infoToggleLabel = infoToggleLabel,
         examples = snapshot.examples.map { it.toPresentation(context) },
     )
 }

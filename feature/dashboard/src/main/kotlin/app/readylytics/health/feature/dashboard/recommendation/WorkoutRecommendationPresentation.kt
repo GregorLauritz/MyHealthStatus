@@ -29,6 +29,5 @@ data class WorkoutRecommendationPresentation(
     val category: String,
     val explanation: String,
     val info: String,
-    val infoToggleLabel: String,
     val examples: List<WorkoutRecommendationExamplePresentation>,
 )

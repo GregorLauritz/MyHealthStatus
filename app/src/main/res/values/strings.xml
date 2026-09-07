@@ -133,7 +133,6 @@
     <string name="workout_recommendation_reason_within_usual_range">Your HRV, sleep, and fatigue
         are all within their usual range.</string>
 
-    <string name="workout_recommendation_info_toggle_label">About this guidance</string>
     <string name="workout_recommendation_info_body">This guidance compares this morning\'s HRV,
         last night\'s sleep, and your recent training fatigue against your own usual range, then
         shows past workouts that matched a similar effort level.</string>

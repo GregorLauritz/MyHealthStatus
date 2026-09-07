@@ -3,31 +3,24 @@ package app.readylytics.health.feature.dashboard.recommendation
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import app.readylytics.health.core.designsystem.dimens
 import app.readylytics.health.core.designsystem.spacing
+import app.readylytics.health.core.ui.components.MetricTooltip
 
 /**
  * Dashboard card showing the day's HRV-guided workout recommendation.
@@ -38,16 +31,13 @@ import app.readylytics.health.core.designsystem.spacing
  * `WorkoutRecommendationSnapshot`, and imports nothing from `:app` — all of that mapping happens
  * in the app-owned content slot that calls this composable.
  *
- * The info-disclosure toggle is transient UI state local to this composable ([rememberSaveable]);
- * it never enters a ViewModel.
+ * The info action uses the same transient tooltip pattern as the other dashboard cards.
  */
 @Composable
 fun WorkoutRecommendationCard(
     presentation: WorkoutRecommendationPresentation,
     onWorkoutClick: (String) -> Unit,
 ) {
-    var isInfoExpanded by rememberSaveable { mutableStateOf(false) }
-
     OutlinedCard(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -60,11 +50,21 @@ fun WorkoutRecommendationCard(
                     .fillMaxWidth()
                     .padding(horizontal = MaterialTheme.spacing.medium, vertical = MaterialTheme.spacing.smallMedium),
         ) {
-            Text(
-                text = presentation.title,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Text(
+                    text = presentation.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                MetricTooltip(
+                    description = presentation.info,
+                    iconTint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Spacer(modifier = Modifier.height(MaterialTheme.spacing.small))
             Text(
                 text = presentation.category,
@@ -85,23 +85,6 @@ fun WorkoutRecommendationCard(
                         WorkoutRecommendationExampleRow(example = example, onWorkoutClick = onWorkoutClick)
                     }
                 }
-            }
-
-            Spacer(modifier = Modifier.height(MaterialTheme.spacing.small))
-            TextButton(onClick = { isInfoExpanded = !isInfoExpanded }) {
-                Text(text = presentation.infoToggleLabel)
-                Spacer(modifier = Modifier.width(MaterialTheme.spacing.small))
-                Icon(
-                    imageVector = if (isInfoExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = null,
-                )
-            }
-            if (isInfoExpanded) {
-                Text(
-                    text = presentation.info,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
     }
