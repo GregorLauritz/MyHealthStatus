@@ -1,5 +1,6 @@
 package app.readylytics.health
 
+import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -32,9 +33,11 @@ import app.readylytics.health.crashreport.buildLogFileShareIntent
 import app.readylytics.health.data.backup.LocalRestoreManager
 import app.readylytics.health.di.ReleaseLogSink
 import app.readylytics.health.domain.migration.DatabaseMigrationController
+import app.readylytics.health.feature.widget.navigation.WidgetDeepLinkHandler
 import app.readylytics.health.ui.crashreport.CrashReportPrompt
 import app.readylytics.health.ui.migration.DatabaseMigrationScreen
 import app.readylytics.health.ui.navigation.AppNavHost
+import app.readylytics.health.ui.navigation.TabDestination
 import app.readylytics.health.ui.recovery.DatabaseRecoveryScreen
 import app.readylytics.health.ui.sync.SyncViewModel
 import app.readylytics.health.ui.theme.DatabaseReadinessTheme
@@ -71,10 +74,12 @@ class MainActivity : ComponentActivity() {
     lateinit var secureLogSink: SecureFileLogSink
 
     private var isKeyValidationComplete by mutableStateOf(false)
+    private var targetTab by mutableStateOf<TabDestination?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
         super.onCreate(savedInstanceState)
+        targetTab = TabDestination.fromIntent(intent)
         enableEdgeToEdge()
 
         lifecycleScope.launch(Dispatchers.IO) {
@@ -147,33 +152,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        targetTab = TabDestination.fromIntent(intent)
+    }
+
     @androidx.compose.runtime.Composable
     private fun ReadylyticsContent(splashScreen: androidx.core.splashscreen.SplashScreen) {
         val dbFile = remember { getDatabasePath("health_dashboard.db") }
         val isDatabaseCorrupted by sqlCipherKeyManager.isKeyCorrupted.collectAsStateWithLifecycle()
 
         if (isDatabaseCorrupted) {
-            splashScreen.setKeepOnScreenCondition { false }
-            FitDashboardTheme {
-                DatabaseRecoveryScreen(
-                    onResetDatabase = {
-                        sqlCipherKeyManager.resetKeyAndDatabase(dbFile)
-                        recreate()
-                    },
-                    onRestoreBackup = { uri, onResult ->
-                        lifecycleScope.launch {
-                            val result = localRestoreManager.get().applyRestore(uri)
-                            if (result is RestoreResult.Success ||
-                                result is RestoreResult.SuccessRequiresRestart
-                            ) {
-                                onResult(true, null)
-                            } else if (result is RestoreResult.Failure) {
-                                onResult(false, getString(R.string.recovery_error_default))
-                            }
-                        }
-                    },
-                )
-            }
+            CorruptedDatabaseRecoveryContent(splashScreen, dbFile)
         } else {
             val viewModel: SyncViewModel = hiltViewModel()
             val prefs by viewModel.userPreferences.collectAsStateWithLifecycle(initialValue = null)
@@ -209,9 +200,44 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                AppNavHost(viewModel = viewModel)
+                AppNavHost(
+                    viewModel = viewModel,
+                    initialTab = targetTab,
+                    onTabConsumed = {
+                        targetTab = null
+                        intent?.removeExtra(WidgetDeepLinkHandler.EXTRA_TARGET_TAB)
+                    },
+                )
                 CrashReportPrompt()
             }
+        }
+    }
+
+    @androidx.compose.runtime.Composable
+    private fun CorruptedDatabaseRecoveryContent(
+        splashScreen: androidx.core.splashscreen.SplashScreen,
+        dbFile: java.io.File,
+    ) {
+        splashScreen.setKeepOnScreenCondition { false }
+        FitDashboardTheme {
+            DatabaseRecoveryScreen(
+                onResetDatabase = {
+                    sqlCipherKeyManager.resetKeyAndDatabase(dbFile)
+                    recreate()
+                },
+                onRestoreBackup = { uri, onResult ->
+                    lifecycleScope.launch {
+                        val result = localRestoreManager.get().applyRestore(uri)
+                        if (result is RestoreResult.Success ||
+                            result is RestoreResult.SuccessRequiresRestart
+                        ) {
+                            onResult(true, null)
+                        } else if (result is RestoreResult.Failure) {
+                            onResult(false, getString(R.string.recovery_error_default))
+                        }
+                    }
+                },
+            )
         }
     }
 

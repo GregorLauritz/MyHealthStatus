@@ -9,7 +9,7 @@ class CompleteFeatureTopologyTest {
     private val root = sequenceOf(File("."), File("..")).first { File(it, "settings.gradle.kts").exists() }
 
     @Test
-    fun `all eight features exist and app owns no feature presentation package`() {
+    fun `all nine features exist and app owns no feature presentation package`() {
         val actual =
             File(root, "feature")
                 .listFiles()
@@ -19,7 +19,7 @@ class CompleteFeatureTopologyTest {
                 }.map { it.name }
                 .toSet()
         assertEquals(
-            setOf("about", "insights", "sleep", "workouts", "vitals", "dashboard", "settings", "onboarding"),
+            setOf("about", "insights", "sleep", "workouts", "vitals", "dashboard", "settings", "onboarding", "widget"),
             actual,
         )
         val appUi = File(root, "app/src/main/kotlin/app/readylytics/health/ui")
@@ -37,6 +37,7 @@ class CompleteFeatureTopologyTest {
             "dashboard",
             "settings",
             "onboarding",
+            "widget",
         ).forEach {
             assertFalse("App still owns ui/$it", File(appUi, it).exists())
         }

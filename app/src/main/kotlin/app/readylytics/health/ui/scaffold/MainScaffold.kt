@@ -57,6 +57,8 @@ import app.readylytics.health.core.ui.R as CoreUiR
 @Composable
 fun MainScaffold(
     modifier: Modifier = Modifier,
+    initialTab: TabDestination? = null,
+    onTabConsumed: () -> Unit = {},
     syncViewModel: SyncViewModel = hiltViewModel(),
 ) {
     val isSyncing by syncViewModel.isSyncing.collectAsStateWithLifecycle()
@@ -75,6 +77,12 @@ fun MainScaffold(
             }
         }
     }
+
+    HandleInitialTabNavigation(
+        navController = navController,
+        initialTab = initialTab,
+        onTabConsumed = onTabConsumed,
+    )
 
     val isSyncProgressScreen = currentDestination?.hasRoute(AppDestination.SyncProgress::class) == true
 
@@ -105,6 +113,31 @@ fun MainScaffold(
                     isSyncProgressScreen = isSyncProgressScreen,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun HandleInitialTabNavigation(
+    navController: NavHostController,
+    initialTab: TabDestination?,
+    onTabConsumed: () -> Unit,
+) {
+    LaunchedEffect(initialTab) {
+        initialTab?.let { tab ->
+            val startDestinationId = runCatching { navController.graph.findStartDestination().id }.getOrNull()
+            if (startDestinationId != null) {
+                navController.navigate(tab) {
+                    popUpTo(startDestinationId) {
+                        saveState = true
+                    }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            } else {
+                navController.navigate(tab)
+            }
+            onTabConsumed()
         }
     }
 }

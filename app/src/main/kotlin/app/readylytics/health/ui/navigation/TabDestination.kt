@@ -1,5 +1,6 @@
 package app.readylytics.health.ui.navigation
 
+import android.content.Intent
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.Dashboard
@@ -13,6 +14,7 @@ import androidx.compose.material.icons.outlined.MonitorHeart
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.ui.graphics.vector.ImageVector
 import app.readylytics.health.R
+import app.readylytics.health.feature.widget.navigation.WidgetDeepLinkHandler
 import kotlinx.serialization.Serializable
 import app.readylytics.health.core.ui.R as CoreUiR
 
@@ -58,5 +60,17 @@ sealed interface TabDestination {
 
     companion object {
         val all = listOf(Dashboard, Sleep, Vitals, Workouts, Settings)
+
+        fun fromTabName(name: String?): TabDestination? =
+            when (name) {
+                WidgetDeepLinkHandler.TAB_DASHBOARD -> Dashboard
+                WidgetDeepLinkHandler.TAB_SLEEP -> Sleep
+                WidgetDeepLinkHandler.TAB_VITALS -> Vitals
+                WidgetDeepLinkHandler.TAB_WORKOUTS -> Workouts
+                else -> null
+            }
+
+        fun fromIntent(intent: Intent?): TabDestination? =
+            fromTabName(intent?.getStringExtra(WidgetDeepLinkHandler.EXTRA_TARGET_TAB))
     }
 }

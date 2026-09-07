@@ -54,6 +54,8 @@ fun AppNavHost(
     navController: NavHostController = rememberNavController(),
     crashReportViewModel: CrashReportViewModel = hiltViewModel(),
     logcatCaptureViewModel: LogcatCaptureViewModel = hiltViewModel(),
+    initialTab: TabDestination? = null,
+    onTabConsumed: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val userPrefs by viewModel.userPreferences.collectAsStateWithLifecycle(initialValue = null)
@@ -113,6 +115,8 @@ fun AppNavHost(
                 onSetSyncBackgrounded = { syncBackgrounded = true },
                 onReportIssue = { pendingReportType = GitHubIssueType.BUG_REPORT },
             ),
+        initialTab = initialTab,
+        onTabConsumed = onTabConsumed,
     )
 }
 
@@ -120,13 +124,18 @@ fun AppNavHost(
 private fun AppNavGraph(
     navController: NavHostController,
     onboardingArgs: OnboardingDestinationArgs,
+    initialTab: TabDestination?,
+    onTabConsumed: () -> Unit,
 ) {
     NavHost(
         navController = navController,
         startDestination = AppDestination.MainShell,
     ) {
         composable<AppDestination.MainShell> {
-            MainScaffold()
+            MainScaffold(
+                initialTab = initialTab,
+                onTabConsumed = onTabConsumed,
+            )
         }
 
         addOnboardingDestination(navController, onboardingArgs)
