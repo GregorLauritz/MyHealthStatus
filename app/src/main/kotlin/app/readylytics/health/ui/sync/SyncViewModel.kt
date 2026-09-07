@@ -9,9 +9,11 @@ import app.readylytics.health.core.model.domain.repository.HealthConnectReposito
 import app.readylytics.health.core.model.domain.repository.PermissionStatus
 import app.readylytics.health.core.model.domain.sync.HistoricalResyncController
 import app.readylytics.health.core.model.domain.sync.HistoricalResyncState
+import app.readylytics.health.core.model.domain.widget.WidgetUpdatePort
 import app.readylytics.health.core.ui.common.BaseViewModel
 import app.readylytics.health.core.ui.common.UiText
 import app.readylytics.health.data.preferences.SettingsRepository
+import dagger.Lazy
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -59,6 +61,7 @@ class SyncViewModel
         private val historicalResyncController: HistoricalResyncController,
         private val settingsRepo: SettingsRepository,
         private val selectedDateRepository: SelectedDateRepository,
+        private val widgetUpdatePort: Lazy<WidgetUpdatePort>,
     ) : BaseViewModel() {
         fun validateSyncNecessary(): Result<Unit> = Result.success(Unit)
 
@@ -88,6 +91,7 @@ class SyncViewModel
         init {
             viewModelScope.launch {
                 foregroundSyncController.syncCompletedEvent.collect {
+                    widgetUpdatePort.get().updateAllWidgets()
                     _syncEvents.trySend(SyncEvent.SyncCompleted)
                 }
             }

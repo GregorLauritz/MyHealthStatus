@@ -15,10 +15,12 @@ import app.readylytics.health.core.model.domain.sync.ForegroundSyncGateway
 import app.readylytics.health.core.model.domain.sync.HealthDataRefresh
 import app.readylytics.health.core.model.domain.sync.HistoricalResyncController
 import app.readylytics.health.core.model.domain.user.UserProfileActions
+import app.readylytics.health.core.model.domain.widget.WidgetUpdatePort
 import app.readylytics.health.data.preferences.SettingsRepository
 import app.readylytics.health.domain.sync.HealthDataRefreshAdapter
 import app.readylytics.health.domain.sync.HistoricalResyncControllerImpl
 import app.readylytics.health.domain.user.UserUseCase
+import app.readylytics.health.feature.widget.data.WidgetUpdateCoordinator
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -89,4 +91,8 @@ abstract class FeaturePortModule {
     abstract fun bindBackupStoreFactory(
         impl: app.readylytics.health.data.backup.DefaultBackupStoreFactory,
     ): app.readylytics.health.data.backup.BackupStoreFactory
+
+    @Binds
+    @Singleton
+    abstract fun bindWidgetUpdatePort(impl: WidgetUpdateCoordinator): WidgetUpdatePort
 }

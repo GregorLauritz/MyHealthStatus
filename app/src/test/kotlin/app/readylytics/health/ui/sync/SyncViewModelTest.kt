@@ -8,7 +8,9 @@ import app.readylytics.health.core.model.domain.repository.HealthConnectReposito
 import app.readylytics.health.core.model.domain.repository.PermissionStatus
 import app.readylytics.health.core.model.domain.sync.HistoricalResyncController
 import app.readylytics.health.core.model.domain.sync.HistoricalResyncState
+import app.readylytics.health.core.model.domain.widget.WidgetUpdatePort
 import app.readylytics.health.data.preferences.SettingsRepository
+import dagger.Lazy
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.coVerifyOrder
@@ -36,6 +38,7 @@ class SyncViewModelTest {
     private lateinit var historicalResyncController: HistoricalResyncController
     private lateinit var settingsRepo: SettingsRepository
     private lateinit var selectedDateRepository: SelectedDateRepository
+    private lateinit var widgetUpdatePort: WidgetUpdatePort
     private lateinit var viewModel: SyncViewModel
 
     @Before
@@ -57,6 +60,7 @@ class SyncViewModelTest {
         every { settingsRepo.userPreferences } returns MutableStateFlow(UserPreferences())
 
         selectedDateRepository = mockk(relaxed = true)
+        widgetUpdatePort = mockk(relaxed = true)
         viewModel =
             SyncViewModel(
                 hcRepo = hcRepo,
@@ -64,6 +68,7 @@ class SyncViewModelTest {
                 historicalResyncController = historicalResyncController,
                 settingsRepo = settingsRepo,
                 selectedDateRepository = selectedDateRepository,
+                widgetUpdatePort = Lazy { widgetUpdatePort },
             )
     }
 
@@ -229,5 +234,31 @@ class SyncViewModelTest {
     fun skipSync_updatesStateToPermissionsGranted() {
         viewModel.skipSync()
         assertIs<SyncUiState.PermissionsGranted>(viewModel.uiState.value)
+    }
+
+    @Test
+    fun syncCompletedEvent_triggersWidgetUpdatePort() {
+        val syncCompletedFlow =
+            MutableSharedFlow<Unit>(
+                extraBufferCapacity = 1,
+                onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+            )
+        every { foregroundSyncController.syncCompletedEvent } returns syncCompletedFlow
+
+        val coordinator = mockk<WidgetUpdatePort>(relaxed = true)
+        SyncViewModel(
+            hcRepo = hcRepo,
+            foregroundSyncController = foregroundSyncController,
+            historicalResyncController = historicalResyncController,
+            settingsRepo = settingsRepo,
+            selectedDateRepository = selectedDateRepository,
+            widgetUpdatePort = Lazy { coordinator },
+        )
+
+        testDispatcher.scheduler.runCurrent()
+        syncCompletedFlow.tryEmit(Unit)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        io.mockk.coVerify(exactly = 1) { coordinator.updateAllWidgets() }
     }
 }
