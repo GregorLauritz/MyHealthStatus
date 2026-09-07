@@ -23,5 +23,16 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/strain_recovery_widget_info" />
         </receiver>
+        <receiver
+            android:name=".receiver.VitalsStripWidgetReceiver"
+            android:label="@string/widget_vitals_4x1_name"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/vitals_strip_widget_info" />
+        </receiver>
     </application>
 </manifest>
