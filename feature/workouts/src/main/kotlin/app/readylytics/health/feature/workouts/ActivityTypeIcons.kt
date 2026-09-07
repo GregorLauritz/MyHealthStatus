@@ -18,7 +18,7 @@ import app.readylytics.health.core.model.domain.workouts.detail.WorkoutLayoutTyp
 
 /** Monochrome icon per activity type, tinted by the caller (`onSurfaceVariant`). Rendered in the
  *  same style as the Weekly stat cards' icons — no per-type accent colors. */
-internal val WorkoutLayoutType.icon: ImageVector
+val WorkoutLayoutType.icon: ImageVector
     get() =
         when (this) {
             WorkoutLayoutType.RUNNING -> Icons.AutoMirrored.Filled.DirectionsRun

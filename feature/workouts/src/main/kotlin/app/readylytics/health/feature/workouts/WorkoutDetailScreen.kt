@@ -107,7 +107,13 @@ fun WorkoutDetailScreen(
     onReorderItems: (List<WorkoutDetailItemConfiguration>) -> Unit = {},
     onResetLayoutToDefaults: () -> Unit = {},
 ) {
-    val workout = uiState.workout ?: return
+    val workout = uiState.workout
+    if (workout == null) {
+        // The referenced workout was deleted (or never existed): show an explicit unavailable
+        // state rather than a blank screen or navigating anywhere by approximate date/type.
+        WorkoutDetailUnavailable(modifier = modifier)
+        return
+    }
     val scrollState = rememberScrollState()
     val manageState = rememberManageLayoutState()
 
@@ -195,6 +201,17 @@ fun WorkoutDetailScreen(
             onCancelClick = onCancelLayoutManagement,
             onManageClick = manageState.openManage,
             modifier = Modifier.align(Alignment.BottomEnd).padding(MaterialTheme.spacing.pageHorizontal),
+        )
+    }
+}
+
+@Composable
+private fun WorkoutDetailUnavailable(modifier: Modifier = Modifier) {
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text(
+            text = stringResource(R.string.workout_detail_not_found),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

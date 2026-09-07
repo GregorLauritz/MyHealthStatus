@@ -10,6 +10,7 @@ import app.readylytics.health.core.database.data.local.SessionLinkReconcilerImpl
 import app.readylytics.health.core.databaseschema.data.local.entity.DailySummaryEntity
 import app.readylytics.health.core.model.data.preferences.UserPreferences
 import app.readylytics.health.core.database.data.repository.BodyMetricsDataLoader
+import app.readylytics.health.core.database.data.repository.MorningRecommendationDependencies
 import app.readylytics.health.core.database.data.repository.ReadinessSummaryCoordinator
 import app.readylytics.health.core.database.data.repository.ScoringDayDataLoader
 import app.readylytics.health.core.database.data.repository.ScoringSeriesLoader
@@ -43,8 +44,6 @@ import app.readylytics.health.core.scoring.domain.scoring.strategies.SleepScorin
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -72,34 +71,17 @@ import app.readylytics.health.core.database.data.repository.ScoringDataLoaders
  * running against a real Robolectric in-memory Room database.
  *
  * To regenerate the golden file after an intentional scoring change, run:
- *   ./gradlew :app:testDebugUnitTest --tests "*.GoldenFixtureWalkForwardTest" -Dupdate.golden=true
- * then inspect the diff of `app/src/test/resources/golden/scoring_walk_forward_golden.json` before
- * committing.
+ *   ./gradlew :core:database:testDebugUnitTest --tests "*.GoldenFixtureWalkForwardTest" \
+ *     -Dupdate.golden=true
+ * then inspect the diff of `core/database/src/test/resources/golden/scoring_walk_forward_golden.json`
+ * before committing. Without that flag the suite *asserts* against the checked-in fixture -- never
+ * hardcode the flag to `true`, or this lock silently stops being able to fail.
  *
- * **Known-stale as of WP-10 (SCORE-001/SCORE-005 TRIMP unification):** `ScoringRepositoryImpl`
- * now persists `WorkoutRecordEntity.modelTrimp` per workout and `WorkoutDao.getTrimpPoints` reads
- * `COALESCE(modelTrimp, trimp)`, so the workout-only ATL/CTL series in the checked-in golden JSON
- * (computed under the old zone-weighted-only read) is expected to diverge from a fresh run wherever
- * this fixture's default `BANISTER` model produces a different per-workout value than the
- * zone-weighted formula.
- *
- * **Known-stale as of WP-11 (HC-006 stage-less-night fallback):** the stage-less-night scenario
- * (`stageLessNightDate`) no longer throws `IllegalArgumentException("durationMinutes must be >
- * 0")` -- see `toSleepDaySegment`'s defensive raw-span fallback in `ScoringRepositoryImpl` and
- * `BaselineComputer`. The ~57 days previously left unscored by that exception (its own night plus
- * every day whose baseline/aggregation lookback still included it) now produce normally-scored
- * rows, so the checked-in golden JSON is missing entries for that whole window.
- *
- * This environment has no working Gradle (see `internal-docs/plans/PHASE_1_IMPLEMENTATION_PLAN.md`),
- * so the fixture could not be regenerated here for either change above -- the next CI/Gradle-capable
- * pass must run the `-Dupdate.golden=true` regeneration above, review the combined score deltas it
- * produces, and commit the refreshed JSON separately per the remediation plan's migration-risk
- * requirement.
+ * The comparison excludes `workoutRecommendationJson`; see [GoldenEntityJson] for why.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
 class GoldenFixtureWalkForwardTest {
-    private val json = Json { prettyPrint = true }
     private val zoneId: ZoneId = ZoneId.of("Europe/Berlin")
     private val startDate: LocalDate = LocalDate.of(2024, 6, 1)
     private val endDate: LocalDate = LocalDate.of(2026, 5, 31)
@@ -255,6 +237,15 @@ class GoldenFixtureWalkForwardTest {
                     scoringHistoryRepository = scoringHistoryRepository,
                     readinessSummaryCoordinator = readinessSummaryCoordinator,
                     defaultDispatcher = UnconfinedTestDispatcher(),
+                    recommendationDependencies =
+                        MorningRecommendationDependencies(
+                            sleepSessionRepository = io.mockk.mockk(relaxed = true),
+                            computeSleepMetricsUseCase = io.mockk.mockk(relaxed = true),
+                            hrvResolver = io.mockk.mockk(relaxed = true),
+                            workoutRepository = io.mockk.mockk(relaxed = true),
+                            dailySummaryRepository = io.mockk.mockk(relaxed = true),
+                            getWorkoutDisplayMetricsUseCase = io.mockk.mockk(relaxed = true),
+                        ),
                 )
             // WP-11/HC-006 fix: this fixture's stage-less-night scenario (`stageLessNightDate`)
             // seeds a SleepSessionEntity with durationMinutes = 0 directly (mirroring a session
@@ -273,11 +264,9 @@ class GoldenFixtureWalkForwardTest {
             }
 
             val summaries = db.dailySummaryDao().getAllSummaries().sortedBy { it.dateMidnightMs }
-            val actualJson =
-                json.encodeToString(ListSerializer(DailySummaryEntity.serializer()), summaries)
+            val actualJson = GoldenEntityJson.encode(summaries)
 
-            val updateGolden = true
-            if (updateGolden) {
+            if (UPDATE_GOLDEN) {
                 val target = goldenWriteTarget()
                 target.parentFile?.mkdirs()
                 target.writeText(actualJson)
@@ -296,6 +285,14 @@ class GoldenFixtureWalkForwardTest {
 
     private companion object {
         const val GOLDEN_RESOURCE_RELATIVE_PATH = "golden/scoring_walk_forward_golden.json"
+
+        /**
+         * Regeneration is opt-in via `-Dupdate.golden=true` (forwarded to the test JVM by
+         * `core/database/build.gradle.kts`). It must never be hardcoded to `true`: a suite that
+         * always rewrites its own fixture and returns before asserting can never fail, which
+         * silently disables the scoring-regression lock this fixture exists to provide.
+         */
+        val UPDATE_GOLDEN: Boolean = System.getProperty("update.golden") == "true"
     }
 
     private fun goldenFileCandidates(): List<File> =

@@ -562,8 +562,22 @@ class ResidualFatigueScoringIntegrityTest {
             scoringHistoryRepository = scoringHistoryRepository,
             readinessSummaryCoordinator = coordinator,
             defaultDispatcher = UnconfinedTestDispatcher(),
+            recommendationDependencies = fakeRecommendationDependencies(),
         )
     }
+
+    // The recommendation feature is orthogonal to residual-fatigue scoring integrity: relaxed mocks
+    // resolve to a NO_SLEEP snapshot (no session ends "today" in these fixtures) without needing
+    // real repositories wired up.
+    private fun fakeRecommendationDependencies() =
+        MorningRecommendationDependencies(
+            sleepSessionRepository = io.mockk.mockk(relaxed = true),
+            computeSleepMetricsUseCase = io.mockk.mockk(relaxed = true),
+            hrvResolver = io.mockk.mockk(relaxed = true),
+            workoutRepository = io.mockk.mockk(relaxed = true),
+            dailySummaryRepository = io.mockk.mockk(relaxed = true),
+            getWorkoutDisplayMetricsUseCase = io.mockk.mockk(relaxed = true),
+        )
 
     private fun createDataLoader(database: HealthDatabase): ScoringDayDataLoader =
         ScoringDayDataLoader(

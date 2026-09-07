@@ -9,6 +9,9 @@ import app.readylytics.health.core.database.data.local.HealthDatabase
 import app.readylytics.health.core.database.data.local.RoomTransactionRunner
 import app.readylytics.health.core.database.data.local.SessionLinkReconcilerImpl
 import app.readylytics.health.core.database.data.repository.BodyMetricsDataLoader
+import app.readylytics.health.core.database.data.repository.DailySummaryRepositoryImpl
+import app.readylytics.health.core.database.data.repository.HeartRateRepositoryImpl
+import app.readylytics.health.core.database.data.repository.MorningRecommendationDependencies
 import app.readylytics.health.core.database.data.repository.ReadinessSummaryCoordinator
 import app.readylytics.health.core.database.data.repository.ScoringDataLoaders
 import app.readylytics.health.core.database.data.repository.ScoringDayDataLoader
@@ -16,6 +19,7 @@ import app.readylytics.health.core.database.data.repository.ScoringDayUseCases
 import app.readylytics.health.core.database.data.repository.ScoringHistoryRepositoryImpl
 import app.readylytics.health.core.database.data.repository.ScoringRepositoryImpl
 import app.readylytics.health.core.database.data.repository.ScoringSeriesLoader
+import app.readylytics.health.core.database.data.repository.WorkoutRepositoryImpl
 import app.readylytics.health.core.databaseschema.data.local.entity.HeartRateRecordEntity
 import app.readylytics.health.core.databaseschema.data.local.entity.SleepSessionEntity
 import app.readylytics.health.core.databaseschema.data.local.entity.SleepStageEntity
@@ -34,10 +38,13 @@ import app.readylytics.health.core.scoring.domain.scoring.CompositeScoringCalcul
 import app.readylytics.health.core.scoring.domain.scoring.ComputeDailyTrimpUseCase
 import app.readylytics.health.core.scoring.domain.scoring.ComputeResidualFatigueUseCase
 import app.readylytics.health.core.scoring.domain.scoring.ComputeSleepMetricsUseCase
+import app.readylytics.health.core.scoring.domain.scoring.ComputeWorkoutLoadMetricsUseCase
 import app.readylytics.health.core.scoring.domain.scoring.ComputeWorkoutTrimpUseCase
+import app.readylytics.health.core.scoring.domain.scoring.GetWorkoutDisplayMetricsUseCase
 import app.readylytics.health.core.scoring.domain.scoring.ResolveDailyBaselinesUseCase
 import app.readylytics.health.core.scoring.domain.scoring.ScoringConfigFactory
 import app.readylytics.health.core.scoring.domain.scoring.SleepMetricsCollaborators
+import app.readylytics.health.core.scoring.domain.scoring.WorkoutLoadClassifier
 import app.readylytics.health.core.scoring.domain.scoring.sleep.CurrentNightHrvResolver
 import app.readylytics.health.core.scoring.domain.scoring.sleep.HrCoverageValidator
 import app.readylytics.health.core.scoring.domain.scoring.sleep.SleepModifierResolver
@@ -257,6 +264,23 @@ class ScoringWalkForwardBenchmark {
                 assembleDailySummaryUseCase = assembleDailySummaryUseCase,
             )
 
+        val workoutRepository = WorkoutRepositoryImpl(db.workoutDao(), db.workoutRoutePointDao())
+        val dailySummaryRepository =
+            DailySummaryRepositoryImpl(db.dailySummaryDao(), db.sleepSessionDao(), settingsRepo)
+        val heartRateRepository = HeartRateRepositoryImpl(db.heartRateDao(), db.hrvDao(), db.minuteBucketDao())
+        val getWorkoutDisplayMetricsUseCase =
+            GetWorkoutDisplayMetricsUseCase(
+                dailySummaryRepository = dailySummaryRepository,
+                heartRateRepository = heartRateRepository,
+                settingsRepo = settingsRepo,
+                computeWorkoutLoadMetricsUseCase =
+                    ComputeWorkoutLoadMetricsUseCase(
+                        ComputeWorkoutTrimpUseCase(),
+                        scoringCalculator,
+                        WorkoutLoadClassifier(),
+                    ),
+            )
+
         val scoringRepository =
             ScoringRepositoryImpl(
                 loaders =
@@ -278,6 +302,15 @@ class ScoringWalkForwardBenchmark {
                 scoringHistoryRepository = scoringHistoryRepository,
                 readinessSummaryCoordinator = readinessSummaryCoordinator,
                 defaultDispatcher = kotlinx.coroutines.Dispatchers.Default,
+                recommendationDependencies =
+                    MorningRecommendationDependencies(
+                        sleepSessionRepository = sleepSessionRepository,
+                        computeSleepMetricsUseCase = computeSleepMetricsUseCase,
+                        hrvResolver = CurrentNightHrvResolver(scoringHistoryRepository),
+                        workoutRepository = workoutRepository,
+                        dailySummaryRepository = dailySummaryRepository,
+                        getWorkoutDisplayMetricsUseCase = getWorkoutDisplayMetricsUseCase,
+                    ),
             )
 
         benchmarkRule.measureRepeated {

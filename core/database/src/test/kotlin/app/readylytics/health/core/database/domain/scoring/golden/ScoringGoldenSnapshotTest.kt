@@ -16,6 +16,7 @@ import app.readylytics.health.core.database.data.mapper.DailySummaryMapper
 import app.readylytics.health.core.model.domain.preferences.PhysiologyProfile
 import app.readylytics.health.core.model.domain.preferences.UserPreferences
 import app.readylytics.health.core.database.data.repository.BodyMetricsDataLoader
+import app.readylytics.health.core.database.data.repository.MorningRecommendationDependencies
 import app.readylytics.health.core.database.data.repository.ReadinessSummaryCoordinator
 import app.readylytics.health.core.database.data.repository.ScoringDayDataLoader
 import app.readylytics.health.core.database.data.repository.ScoringSeriesLoader
@@ -49,8 +50,6 @@ import app.readylytics.health.core.scoring.domain.scoring.strategies.SleepScorin
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -66,7 +65,6 @@ import app.readylytics.health.core.database.data.repository.ScoringDataLoaders
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(AndroidJUnit4::class)
 class ScoringGoldenSnapshotTest {
-    private val json = Json { prettyPrint = true }
     private val zoneId: ZoneId = ZoneId.of("Europe/Berlin")
     private val targetDate: LocalDate = LocalDate.of(2026, 6, 15)
     private val targetMidnightMs = targetDate.atStartOfDay(zoneId).toInstant().toEpochMilli()
@@ -163,6 +161,15 @@ class ScoringGoldenSnapshotTest {
             scoringHistoryRepository = scoringHistoryRepository,
             readinessSummaryCoordinator = readinessSummaryCoordinator,
             defaultDispatcher = UnconfinedTestDispatcher(),
+            recommendationDependencies =
+                MorningRecommendationDependencies(
+                    sleepSessionRepository = io.mockk.mockk(relaxed = true),
+                    computeSleepMetricsUseCase = io.mockk.mockk(relaxed = true),
+                    hrvResolver = io.mockk.mockk(relaxed = true),
+                    workoutRepository = io.mockk.mockk(relaxed = true),
+                    dailySummaryRepository = io.mockk.mockk(relaxed = true),
+                    getWorkoutDisplayMetricsUseCase = io.mockk.mockk(relaxed = true),
+                ),
         )
     }
 
@@ -557,10 +564,9 @@ class ScoringGoldenSnapshotTest {
     private suspend fun assertMatchesGolden(caseName: String) {
         val summary = repo.computeDailySummary(targetDate)
         val actualEntity = DailySummaryMapper.toEntity(summary, zoneId)
-        val actualJson = json.encodeToString(actualEntity)
+        val actualJson = GoldenEntityJson.encode(actualEntity)
 
-        val updateGolden = true
-        if (updateGolden) {
+        if (UPDATE_GOLDEN) {
             val target = goldenWriteTarget(caseName)
             target.parentFile?.mkdirs()
             target.writeText(actualJson)
@@ -571,6 +577,16 @@ class ScoringGoldenSnapshotTest {
         val expectedJson = loadGoldenJsonOrNull(caseName)
         assertNotNull(expectedJson, "Missing golden fixture for $caseName. Run with -Dupdate.golden=true to generate.")
         assertEquals(expectedJson, actualJson, "Output diverged from golden fixture $caseName")
+    }
+
+    private companion object {
+        /**
+         * Regeneration is opt-in via `-Dupdate.golden=true` (forwarded to the test JVM by
+         * `core/database/build.gradle.kts`). It must never be hardcoded to `true`: a suite that
+         * always rewrites its own fixture and returns before asserting can never fail, which
+         * silently disables the scoring-regression lock these fixtures exist to provide.
+         */
+        val UPDATE_GOLDEN: Boolean = System.getProperty("update.golden") == "true"
     }
 
     private fun goldenResourceRelativePath(caseName: String): String = "golden/$caseName.json"

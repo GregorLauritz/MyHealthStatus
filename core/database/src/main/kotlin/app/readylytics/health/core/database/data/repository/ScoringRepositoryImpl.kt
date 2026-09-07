@@ -16,6 +16,9 @@ import app.readylytics.health.core.model.domain.repository.WalkForwardTrimpConte
 import app.readylytics.health.core.model.domain.repository.WalkForwardVo2MaxContext
 import app.readylytics.health.core.model.domain.scoring.ScoringConstants
 import app.readylytics.health.core.model.domain.util.logD
+import app.readylytics.health.core.database.data.repository.recommendation.MorningRecommendationAssembler
+import app.readylytics.health.core.database.data.repository.recommendation.MorningRecoveryLoader
+import app.readylytics.health.core.database.data.repository.recommendation.WorkoutExampleLoader
 import app.readylytics.health.core.scoring.domain.scoring.BaselineComputer
 import app.readylytics.health.core.scoring.domain.scoring.EverydayHrLoadResult
 import app.readylytics.health.core.scoring.domain.scoring.ScoringConfigFactory
@@ -46,6 +49,7 @@ class ScoringRepositoryImpl
         private val scoringHistoryRepository: ScoringHistoryRepository,
         private val readinessSummaryCoordinator: ReadinessSummaryCoordinator,
         @DefaultDispatcher private val defaultDispatcher: CoroutineDispatcher,
+        private val recommendationDependencies: MorningRecommendationDependencies,
     ) : ScoringRepository {
         private val calculationMutex = Mutex()
 
@@ -79,6 +83,28 @@ class ScoringRepositoryImpl
                     useCases.uthVo2MaxCalculator,
                     useCases.materkoAdaptedVo2MaxCalculator,
                     useCases.vo2MaxSourceResolver,
+                ),
+            )
+
+        // Reuses this repository's own `residualFatigueComputer`/`calibrationGate` rather than
+        // separate instances: both are stateless aside from the caller-passed walk-forward context
+        // (see `ResidualFatigueComputer`), so sharing them is equivalent to Hilt providing fresh ones.
+        private val morningRecommendationAssembler =
+            MorningRecommendationAssembler(
+                recommendationDependencies.sleepSessionRepository,
+                MorningRecoveryLoader(
+                    recommendationDependencies.sleepSessionRepository,
+                    recommendationDependencies.computeSleepMetricsUseCase,
+                    recommendationDependencies.hrvResolver,
+                    residualFatigueComputer,
+                    scoringConfigFactory,
+                    baselineComputer,
+                    calibrationGate,
+                ),
+                WorkoutExampleLoader(
+                    recommendationDependencies.workoutRepository,
+                    recommendationDependencies.dailySummaryRepository,
+                    recommendationDependencies.getWorkoutDisplayMetricsUseCase,
                 ),
             )
 
@@ -231,7 +257,7 @@ class ScoringRepositoryImpl
                     rasTotals.last6DaysRasWorkoutOnly,
                     finalSummary.totalRasWorkoutOnly,
                 )
-                finalSummary
+                morningRecommendationAssembler.applyRecommendation(context, finalSummary)
             }
 
         override suspend fun persist(summary: DailySummary) {
@@ -240,6 +266,25 @@ class ScoringRepositoryImpl
 
         override suspend fun toReadinessResult(summary: DailySummary): ReadinessResult = summary.readinessResult
     }
+
+/**
+ * Anchored to the wake time, entirely independent of the TRIMP/readiness pipeline that produced
+ * [finalSummary]. Never recurses back into `computeDailySummary`.
+ *
+ * A day whose recovery inputs could not be computed yields a `null` assembly. That must not abort
+ * the day — the readiness pipeline has already produced a complete [finalSummary] and the day still
+ * scores and persists — and it must not *erase* guidance that a previous run already computed for
+ * this day, so the stored snapshot is preserved (the same "no fresh value means keep the stored one"
+ * rule `withStepCount` applies to step counts). A day that has never had one simply stays `null`.
+ */
+private suspend fun MorningRecommendationAssembler.applyRecommendation(
+    context: ScoringDayContext,
+    finalSummary: DailySummary,
+): DailySummary {
+    val previous = context.dailySummary?.workoutRecommendation
+    val recommendation = assemble(context, previous = previous) ?: previous
+    return finalSummary.copy(workoutRecommendation = recommendation)
+}
 
 /** A null [steps] means no fresh count for the day; the stored value is preserved. */
 private fun DailySummary.withStepCount(steps: Long?): DailySummary =

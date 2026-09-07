@@ -37,7 +37,10 @@ this can include:
   GPS track
 
 Readylytics reads this data to calculate fitness and training load trends, sleep insights,
-readiness, and recovery context.
+readiness, and recovery context, including a daily morning workout recommendation (e.g. suggesting
+an easier or harder session, or rest) derived entirely from your own locally stored history. This
+recommendation, and the past workouts it may reference as examples, are computed and stored on-device
+only — never uploaded, and never require a network request to produce.
 
 ## Local storage
 
@@ -55,7 +58,9 @@ when StrongBox is unavailable. Backup passwords and database keys remain local t
 
 A local restore replaces local health data from the selected backup. If settings restoration fails
 after health data is restored, Readylytics reports a partial restore and asks you to restart and
-rerun restore.
+rerun restore. An older backup made before workout recommendations existed, or one otherwise missing
+that computed data, still restores successfully; Readylytics detects the gap from the restored data
+itself and quietly recomputes those recommendations locally afterward, entirely on-device.
 
 The production app does not request the Android `INTERNET` permission. It does
 not include analytics, advertising, telemetry uploads, or any Readylytics-run

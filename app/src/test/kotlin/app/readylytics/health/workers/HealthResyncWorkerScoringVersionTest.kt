@@ -2,6 +2,7 @@ package app.readylytics.health.workers
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import androidx.work.Data
 import androidx.work.WorkerParameters
 import app.readylytics.health.core.healthconnect.domain.sync.ForegroundSyncController
 import app.readylytics.health.core.healthconnect.domain.sync.FullHistoricalResyncUseCase
@@ -12,17 +13,20 @@ import app.readylytics.health.core.model.domain.migration.DatabaseReadinessInspe
 import app.readylytics.health.core.model.domain.model.Result
 import app.readylytics.health.core.model.domain.preferences.SettingsRepository
 import app.readylytics.health.core.model.domain.scoring.TrainingReadinessConfig
+import app.readylytics.health.core.model.domain.util.RetentionBounds
 import dagger.Lazy
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.time.LocalDate
 import kotlin.test.assertEquals
 
 @RunWith(RobolectricTestRunner::class)
@@ -78,8 +82,9 @@ class HealthResyncWorkerScoringVersionTest {
                     .success(),
                 result,
             )
-            assertEquals(4, SettingsDefaults.CURRENT_SCORING_VERSION)
-            coVerify(exactly = 1) { settingsRepository.updateScoringVersion(4) }
+            coVerify(exactly = 1) {
+                settingsRepository.updateScoringVersion(SettingsDefaults.CURRENT_SCORING_VERSION)
+            }
         }
 
     @Test
@@ -120,6 +125,136 @@ class HealthResyncWorkerScoringVersionTest {
                 result,
             )
             coVerify(exactly = 0) { settingsRepository.updateScoringVersion(any()) }
+        }
+
+    @Test
+    fun `a bounded recompute-only pass does not advance a stale scoringVersion even on success`() =
+        runTest {
+            // A narrow historical range far short of the full retention window -- e.g. a settings
+            // change, DataCleanupWorker's retention fan-out, or a correction's example fan-out.
+            every { workerParams.inputData } returns
+                Data
+                    .Builder()
+                    .putBoolean(HealthResyncWorker.KEY_RECOMPUTE_ONLY, true)
+                    .putLong(
+                        HealthResyncWorker.KEY_RECOMPUTE_START_EPOCH_DAY,
+                        LocalDate.of(2026, 1, 1).toEpochDay(),
+                    ).putLong(
+                        HealthResyncWorker.KEY_RECOMPUTE_END_EPOCH_DAY,
+                        LocalDate.of(2026, 1, 10).toEpochDay(),
+                    ).build()
+            coEvery { settingsRepository.userPreferences } returns
+                MutableStateFlow(UserPreferences(scoringVersion = 3))
+            coEvery { useCase.execute(any(), any(), any()) } returns Result.Success(Unit)
+
+            val result = createWorker().doWork()
+
+            assertEquals(
+                androidx.work.ListenableWorker.Result
+                    .success(),
+                result,
+            )
+            coVerify(exactly = 0) { settingsRepository.updateScoringVersion(any()) }
+            // Progress plumbing is unaffected by the version gate -- still reaches the controller.
+            verify(exactly = 1) { foregroundSyncController.onBackgroundRecalcStarted() }
+            verify(exactly = 1) { foregroundSyncController.onBackgroundRecalcFinished(true) }
+        }
+
+    @Test
+    fun `a recompute-only pass without a range override advances a stale scoringVersion on success`() =
+        runTest {
+            // No KEY_RECOMPUTE_START/END_EPOCH_DAY: an unbounded recompute-only pass, which -- like
+            // a full resync -- always covers the entire retention window through today.
+            every { workerParams.inputData } returns
+                Data.Builder().putBoolean(HealthResyncWorker.KEY_RECOMPUTE_ONLY, true).build()
+            coEvery { settingsRepository.userPreferences } returns
+                MutableStateFlow(UserPreferences(scoringVersion = 3))
+            coEvery { useCase.execute(any(), any(), any()) } returns Result.Success(Unit)
+
+            val result = createWorker().doWork()
+
+            assertEquals(
+                androidx.work.ListenableWorker.Result
+                    .success(),
+                result,
+            )
+            coVerify(exactly = 1) {
+                settingsRepository.updateScoringVersion(SettingsDefaults.CURRENT_SCORING_VERSION)
+            }
+        }
+
+    @Test
+    fun `a bounded recompute-only pass spanning the full retention window still advances`() =
+        runTest {
+            val prefs = UserPreferences(scoringVersion = 3)
+            val today = LocalDate.now()
+            val retentionStart = RetentionBounds.resolveResyncStartDate(prefs, today)
+            every { workerParams.inputData } returns
+                Data
+                    .Builder()
+                    .putBoolean(HealthResyncWorker.KEY_RECOMPUTE_ONLY, true)
+                    .putLong(HealthResyncWorker.KEY_RECOMPUTE_START_EPOCH_DAY, retentionStart.toEpochDay())
+                    .putLong(HealthResyncWorker.KEY_RECOMPUTE_END_EPOCH_DAY, today.toEpochDay())
+                    .build()
+            coEvery { settingsRepository.userPreferences } returns MutableStateFlow(prefs)
+            coEvery { useCase.execute(any(), any(), any()) } returns Result.Success(Unit)
+
+            val result = createWorker().doWork()
+
+            assertEquals(
+                androidx.work.ListenableWorker.Result
+                    .success(),
+                result,
+            )
+            coVerify(exactly = 1) {
+                settingsRepository.updateScoringVersion(SettingsDefaults.CURRENT_SCORING_VERSION)
+            }
+        }
+
+    @Test
+    fun `a killed bounded pass leaves the stale version in place for a later retry to advance`() =
+        runTest {
+            // Simulates "failure/resume": first a bounded pass that fails (e.g. transient IO) --
+            // version must stay stale -- then a later, unbounded retry that succeeds and advances it.
+            every { workerParams.inputData } returns
+                Data
+                    .Builder()
+                    .putBoolean(HealthResyncWorker.KEY_RECOMPUTE_ONLY, true)
+                    .putLong(
+                        HealthResyncWorker.KEY_RECOMPUTE_START_EPOCH_DAY,
+                        LocalDate.of(2026, 1, 1).toEpochDay(),
+                    ).putLong(
+                        HealthResyncWorker.KEY_RECOMPUTE_END_EPOCH_DAY,
+                        LocalDate.of(2026, 1, 10).toEpochDay(),
+                    ).build()
+            coEvery { settingsRepository.userPreferences } returns
+                MutableStateFlow(UserPreferences(scoringVersion = 3))
+            coEvery { useCase.execute(any(), any(), any()) } returns Result.Failure("error", "resync failed")
+
+            val failedResult = createWorker().doWork()
+
+            assertEquals(
+                androidx.work.ListenableWorker.Result
+                    .retry(),
+                failedResult,
+            )
+            coVerify(exactly = 0) { settingsRepository.updateScoringVersion(any()) }
+
+            // Retry: a fresh worker instance, unbounded recompute-only, now succeeds.
+            every { workerParams.inputData } returns
+                Data.Builder().putBoolean(HealthResyncWorker.KEY_RECOMPUTE_ONLY, true).build()
+            coEvery { useCase.execute(any(), any(), any()) } returns Result.Success(Unit)
+
+            val retriedResult = createWorker().doWork()
+
+            assertEquals(
+                androidx.work.ListenableWorker.Result
+                    .success(),
+                retriedResult,
+            )
+            coVerify(exactly = 1) {
+                settingsRepository.updateScoringVersion(SettingsDefaults.CURRENT_SCORING_VERSION)
+            }
         }
 
     @Test

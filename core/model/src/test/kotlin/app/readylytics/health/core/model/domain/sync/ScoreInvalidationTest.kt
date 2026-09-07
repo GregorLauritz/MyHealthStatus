@@ -63,4 +63,71 @@ class ScoreInvalidationTest {
         assertEquals(null, merged)
         assertEquals(null, ScoreInvalidation.merge(emptyList()))
     }
+
+    @Test
+    fun `example fan-out range covers 30 days after the correction when retention and today allow it`() {
+        val correctionDate = LocalDate.of(2026, 1, 1)
+        val today = LocalDate.of(2026, 6, 1)
+        val retentionStart = LocalDate.of(2020, 1, 1)
+
+        val result = ScoreInvalidation.exampleFanOutRange(correctionDate, today, retentionStart)
+
+        assertEquals(correctionDate, result?.start)
+        assertEquals(correctionDate.plusDays(30), result?.endInclusive)
+    }
+
+    @Test
+    fun `example fan-out range never extends past today`() {
+        val correctionDate = LocalDate.of(2026, 1, 1)
+        val today = LocalDate.of(2026, 1, 10)
+        val retentionStart = LocalDate.of(2020, 1, 1)
+
+        val result = ScoreInvalidation.exampleFanOutRange(correctionDate, today, retentionStart)
+
+        assertEquals(correctionDate, result?.start)
+        assertEquals(today, result?.endInclusive)
+    }
+
+    @Test
+    fun `example fan-out range never starts before retention`() {
+        val correctionDate = LocalDate.of(2020, 1, 1)
+        val today = LocalDate.of(2026, 1, 1)
+        val retentionStart = LocalDate.of(2020, 1, 15)
+
+        val result = ScoreInvalidation.exampleFanOutRange(correctionDate, today, retentionStart)
+
+        assertEquals(retentionStart, result?.start)
+        assertEquals(correctionDate.plusDays(30), result?.endInclusive)
+    }
+
+    @Test
+    fun `example fan-out range is null when the correction predates retention by more than 30 days`() {
+        val correctionDate = LocalDate.of(2020, 1, 1)
+        val today = LocalDate.of(2026, 1, 1)
+        val retentionStart = LocalDate.of(2020, 3, 1)
+
+        val result = ScoreInvalidation.exampleFanOutRange(correctionDate, today, retentionStart)
+
+        assertEquals(null, result)
+    }
+
+    @Test
+    fun `example fan-out range is null for a correction dated after today`() {
+        val correctionDate = LocalDate.of(2026, 6, 1)
+        val today = LocalDate.of(2026, 1, 1)
+        val retentionStart = LocalDate.of(2020, 1, 1)
+
+        val result = ScoreInvalidation.exampleFanOutRange(correctionDate, today, retentionStart)
+
+        assertEquals(null, result)
+    }
+
+    @Test
+    fun `example selection lookback stays within the max dependent window`() {
+        assertTrue(
+            "EXAMPLE_SELECTION_LOOKBACK_DAYS=${ScoreInvalidation.EXAMPLE_SELECTION_LOOKBACK_DAYS} exceeds " +
+                "MAX_DEPENDENT_WINDOW_DAYS=${ScoreInvalidation.MAX_DEPENDENT_WINDOW_DAYS}",
+            ScoreInvalidation.EXAMPLE_SELECTION_LOOKBACK_DAYS <= ScoreInvalidation.MAX_DEPENDENT_WINDOW_DAYS,
+        )
+    }
 }

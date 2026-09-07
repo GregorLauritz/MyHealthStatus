@@ -31,6 +31,7 @@ enum class CardId {
     TRAINING_READINESS,
     CARDIO_FITNESS,
     TSB,
+    WORKOUT_RECOMMENDATION,
 }
 
 @Serializable

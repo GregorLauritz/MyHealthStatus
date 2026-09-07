@@ -20,6 +20,8 @@ import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.composable
+import app.readylytics.health.R
+import app.readylytics.health.core.model.domain.dashboard.CardId
 import app.readylytics.health.core.model.domain.model.InsightType
 import app.readylytics.health.core.scoring.domain.insights.InsightParams
 import app.readylytics.health.core.scoring.domain.insights.detail.DailyInsightContext
@@ -58,6 +60,7 @@ private fun DashboardDestination(navController: NavHostController) {
         onNavigateToBloodPressure = { navController.navigate(AppDestination.BloodPressureDetail) },
         onNavigateToVitals = { navigateToTab(navController, TabDestination.Vitals) },
         onNavigateToCardioFitness = { navController.navigate(AppDestination.CardioFitnessDetail) },
+        onWorkoutClick = { workoutId -> navController.navigate(AppDestination.WorkoutDetail(workoutId)) },
         onOpenInsight = { selectedInsightParams = it },
         insightDetail = {
             val selected = selectedInsightForDetails
@@ -88,6 +91,11 @@ private fun DashboardDestination(navController: NavHostController) {
                 },
             )
         },
+        workoutRecommendationCard = { uiState, onWorkoutClick ->
+            DashboardWorkoutRecommendationCardContent(uiState = uiState, onWorkoutClick = onWorkoutClick)
+        },
+        cardTitleOverrides =
+            mapOf(CardId.WORKOUT_RECOMMENDATION to stringResource(R.string.card_title_workout_recommendation)),
     )
 }
 

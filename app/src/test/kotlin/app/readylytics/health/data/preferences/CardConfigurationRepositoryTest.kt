@@ -444,4 +444,68 @@ class CardConfigurationRepositoryTest {
         assertNotNull(config)
         assertFalse(requireNotNull(config).isVisible)
     }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun init_appendsWorkoutRecommendationOnceVisibly() =
+        runTest {
+            val capturedUpdate = slot<suspend (CardConfigurationsProto) -> CardConfigurationsProto>()
+            coEvery { dataStore.updateData(capture(capturedUpdate)) } returns
+                CardConfigurationsProto.getDefaultInstance()
+
+            val existingProto =
+                CardConfigurationsProto
+                    .newBuilder()
+                    .addDashboardCards(cardProto(CardId.SLEEP_SCORE.name, position = 0))
+                    .build()
+
+            val testScope = TestScope(testScheduler)
+            CardConfigurationRepositoryImpl(dataStore, testScope)
+            testScope.advanceUntilIdle()
+
+            val updatedProto = capturedUpdate.captured(existingProto)
+
+            val cards = updatedProto.dashboardCardsList.filter { it.cardId == CardId.WORKOUT_RECOMMENDATION.name }
+            assertEquals(1, cards.size)
+            assertTrue(cards.single().isVisible)
+        }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun init_doesNotReShowAPreviouslyHiddenWorkoutRecommendationCard() =
+        runTest {
+            val capturedUpdate = slot<suspend (CardConfigurationsProto) -> CardConfigurationsProto>()
+            coEvery { dataStore.updateData(capture(capturedUpdate)) } returns
+                CardConfigurationsProto.getDefaultInstance()
+
+            // The user already has every default card stored, including WORKOUT_RECOMMENDATION,
+            // which they explicitly hid.
+            val existingProto =
+                CardConfigurationsProto
+                    .newBuilder()
+                    .addAllDashboardCards(
+                        SettingsDefaults.DEFAULT_DASHBOARD_CARDS.map { config ->
+                            cardProto(
+                                config.cardId.name,
+                                isVisible = config.cardId != CardId.WORKOUT_RECOMMENDATION,
+                                position = config.position,
+                            )
+                        },
+                    ).build()
+
+            val testScope = TestScope(testScheduler)
+            CardConfigurationRepositoryImpl(dataStore, testScope)
+            testScope.advanceUntilIdle()
+
+            // No update was necessary: every default card, including the hidden one, was already
+            // present, so ensureDefaultCardsArePresent must not touch the stored proto at all.
+            assertEquals(existingProto, capturedUpdate.captured(existingProto))
+
+            val workoutRecommendationCard =
+                capturedUpdate
+                    .captured(existingProto)
+                    .dashboardCardsList
+                    .single { it.cardId == CardId.WORKOUT_RECOMMENDATION.name }
+            assertFalse(workoutRecommendationCard.isVisible)
+        }
 }

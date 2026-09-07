@@ -388,6 +388,58 @@ You can view your TSB on the Workouts tab (via a toggle) and optionally enable i
 
 ---
 
+## Workout Recommendation
+
+An optional, default-visible Dashboard card that turns this morning's HRV, last night's sleep, and
+your recent training fatigue into one qualitative daily signal: **Rest, Easy workout, or Push
+harder**. It reuses the same profile-tuned HRV deviation bounds and illness-detection logic your
+Readiness score already uses (see Emergency signals, above) — no new coefficients, no separate model.
+
+**What decides the recommendation**
+
+- **HRV vs. your own usual range** — the same per-profile Z-score bounds described under HRV
+  sensitivity by profile, above (±1.2 Athlete / ±1.5 Active / ±2.0 Sedentary), evaluated against this
+  morning's reading rather than last night's frozen baseline.
+- **Possible illness signals** — the same emergency-flag logic described under Readiness caps
+  guidance to Rest.
+- **Last night's Sleep Score** — a score below 60 caps guidance at Easy, even when HRV looks fine.
+- **Recent training fatigue** — a Residual Fatigue value above 70 × your configured gain (the same
+  Warning threshold your Residual Fatigue card already uses) also caps guidance at Easy.
+- **Calibration** — like your other scores, guidance stays "Calibrating" until at least seven valid
+  nights of data exist.
+
+**Missing-data precedence.** If we can't find last night's sleep at all, or this morning's HRV
+reading is missing, we say so directly ("Sleep data missing" / "HRV data missing") rather than
+guessing — a missing HRV reading takes priority over any illness signal, since illness detection
+itself depends on HRV.
+
+**Past examples, when guidance is Easy or Push harder.** We show up to three of your own past
+workouts from the preceding 30 days that matched a similar effort level — one per distinct workout
+type, each longer than 15 minutes, most recent first. Tapping one opens that exact recorded workout.
+Rest and "no data" days never show examples; if fewer than three workouts qualify, we show fewer.
+
+**Existing users.** If you already have history, your past days are backfilled with this guidance
+automatically the next time your local recompute runs — no separate action needed.
+
+**Visibility.** The card is shown by default and can be hidden from your Dashboard layout at any
+time, like any other card.
+
+**What this is not.** There is no generated TRIMP target, workout duration, or heart-rate target
+attached to this guidance — it is deliberately qualitative, not a number. It is not a "safe,"
+"optimal," or validated strength or training prescription, and it is not medical or training advice.
+It reflects the same recovery-adjacent signals your other scores already use, meant to inform your
+own judgment, not replace it.
+
+**Privacy.** Everything above is computed and stored entirely on your device from data you already
+have locally — no network request is made to produce it. If you use encrypted local backups, your
+stored recommendations (and the examples they reference) are included like any other computed data.
+No cloud feature or telemetry was introduced to support this.
+
+_Implemented in: `ComputeWorkoutRecommendationUseCase.kt`, `MorningRecommendationAssembler.kt`,
+`SelectWorkoutRecommendationExamples.kt`_
+
+---
+
 ## What the app needs from you
 
 We read from Android Health Connect:
@@ -483,6 +535,8 @@ Your scores are computed against a stored scoring timezone, so the same underlyi
 6. **This app does not diagnose anything.** If you suspect sleep apnea, a heart condition, an infection, an injury, or any other health concern, see a clinician. Physiological metrics such as HRV, sleep staging, and resting heart rate are non-specific and can be influenced by numerous behavioral, environmental, pharmacological, and measurement-related factors.
 
 7. **Heart-rate history older than 90 days is stored as a compact per-minute summary (min/max/average plus a five-point percentile sketch) rather than every raw sample.** Scores computed from that history are a very close approximation, not bit-identical to what the same night would have scored while still within the 90-day raw window.
+
+8. **The Workout Recommendation is not a safe, optimal, or validated training prescription.** It is a qualitative Rest/Easy/Push-harder signal derived from the same recovery-adjacent HRV, sleep, and fatigue thresholds used elsewhere in this app — not a strength or endurance program, not a numeric load target, and not medical or training advice. Treat it the same way you would treat any other single-day score: informative, not authoritative.
 
 ---
 

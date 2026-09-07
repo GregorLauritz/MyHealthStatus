@@ -72,16 +72,18 @@ class DashboardCardCatalogTest {
     }
 
     @Test
-    fun `Insights and AI recommendation are not in catalog`() {
+    fun `Insights, AI recommendation, and workout recommendation are not in catalog`() {
         assertNull(DashboardCardCatalog.spec(CardId.INSIGHTS))
         assertNull(DashboardCardCatalog.spec(CardId.AI_RECOMMENDATION))
+        assertNull(DashboardCardCatalog.spec(CardId.WORKOUT_RECOMMENDATION))
     }
 
     @Test
-    fun `every default dashboard card except Insights and AI recommendation has a catalog spec`() {
+    fun `every default dashboard card except the bespoke cards has a catalog spec`() {
+        val bespokeCards = setOf(CardId.INSIGHTS, CardId.AI_RECOMMENDATION, CardId.WORKOUT_RECOMMENDATION)
         SettingsDefaults.DEFAULT_DASHBOARD_CARDS
             .map { it.cardId }
-            .filter { it != CardId.INSIGHTS && it != CardId.AI_RECOMMENDATION }
+            .filter { it !in bespokeCards }
             .forEach { cardId ->
                 assertNotNull("Missing catalog spec for $cardId", DashboardCardCatalog.spec(cardId))
             }
@@ -194,6 +196,19 @@ class DashboardCardCatalogTest {
         )
         assertFalse(
             SettingsDefaults.DEFAULT_DASHBOARD_CARDS.single { it.cardId == CardId.TRAINING_READINESS }.isVisible,
+        )
+    }
+
+    @Test
+    fun `workout recommendation card is a visible default appended after every existing card`() {
+        val card = SettingsDefaults.DEFAULT_DASHBOARD_CARDS.single { it.cardId == CardId.WORKOUT_RECOMMENDATION }
+
+        assertTrue(card.isVisible)
+        assertEquals(23, card.position)
+        assertTrue(
+            SettingsDefaults.DEFAULT_DASHBOARD_CARDS
+                .filter { it.cardId != CardId.WORKOUT_RECOMMENDATION }
+                .all { it.position < card.position },
         )
     }
 }

@@ -32,6 +32,18 @@ interface SleepSessionRepository {
 
     suspend fun getSince(fromMs: Long): List<SleepSessionData>
 
+    /**
+     * Sessions that both start at/after [fromMs] and end at/before [toMs], oldest first.
+     *
+     * The bounded counterpart of [getSince]. Callers that only need a fixed trailing window (the
+     * morning-recommendation assembly needs the ~60 days ending at the day it is scoring) must use
+     * this: [getSince] materializes every row through the newest one in the table, so replaying N
+     * historical days with it costs O(N^2) rows instead of O(N).
+     */
+    suspend fun getInRange(
+        fromMs: Long,
+        toMs: Long,
+    ): List<SleepSessionData>
 
     suspend fun countSince(fromMs: Long): Int
 

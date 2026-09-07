@@ -35,6 +35,29 @@ data class SleepMetricsCollaborators
         val restorationScoreAssembler: RestorationScoreAssembler = RestorationScoreAssembler(scoringCalculator),
     )
 
+/**
+ * One sleep-scoring pass.
+ *
+ * [dayEndMs], [currentSessionIds] and [prefetchedSessions] together define how far into the day the
+ * pass is allowed to look, and ordinary daily scoring passes the whole day (next-day midnight, the
+ * aggregated core cluster, and the walk-forward session prefetch).
+ *
+ * A *morning-anchored* caller — the workout recommendation — narrows the same three fields instead
+ * of taking a second code path: [dayEndMs] becomes the selected session's wake time, so the RHR and
+ * HRV baseline windows in `resolveBaselineWindow` stop there; [currentSessionIds] is the single
+ * selected record, so nightly HRV and nocturnal RHR come from that record alone; and
+ * [prefetchedSessions] is pre-truncated at the same wake time, so the regularity modifier's
+ * circadian score cannot see a nap recorded later the same day. A sleep record appended after the
+ * anchor therefore cannot move the resulting `zLnHrv`, sleep score, or illness flag.
+ *
+ * [forceLiveBaselines] completes that bounding. Ordinary scoring reads a day's *frozen* baseline
+ * snapshot once `baselineCalculatedAtDate` is stamped, and that snapshot was itself computed with
+ * `dayEndMs = next-day midnight`. A morning-anchored caller that honoured the freeze would silently
+ * switch bounding regimes the moment a day froze, so the same day would score differently before
+ * and after. Setting this flag keeps the pass on the live, [dayEndMs]-bounded windows in both
+ * cases. It is only safe for callers that do **not** persist the resulting summary — the
+ * recommendation path does not.
+ */
 data class SleepMetricsRequest(
     val session: SleepSession,
     val dayMidnight: Instant,
@@ -48,6 +71,7 @@ data class SleepMetricsRequest(
     val dayEndMs: Long,
     val currentSessionIds: Set<String>,
     val prefetchedSessions: List<SleepSession>?,
+    val forceLiveBaselines: Boolean = false,
 )
 
 internal data class NocturnalScoringInput(

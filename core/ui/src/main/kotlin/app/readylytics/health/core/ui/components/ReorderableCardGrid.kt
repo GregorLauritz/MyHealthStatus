@@ -14,6 +14,7 @@ private val FULL_WIDTH_CARDS =
         CardId.STEPS,
         CardId.INSIGHTS,
         CardId.AI_RECOMMENDATION,
+        CardId.WORKOUT_RECOMMENDATION,
     )
 
 // Gauge dial cards that render inside a fixed-height box so paired rows stay uniform.

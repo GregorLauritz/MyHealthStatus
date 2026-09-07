@@ -17,6 +17,7 @@ import app.readylytics.health.core.scoring.domain.scoring.RasSourceModeBootstrap
 import app.readylytics.health.core.model.domain.sync.*
 import app.readylytics.health.core.model.domain.sync.StepAttribution
 import app.readylytics.health.core.model.domain.sync.link.SessionLinkReconciler
+import app.readylytics.health.core.model.domain.util.RetentionBounds
 import app.readylytics.health.core.model.domain.util.logD
 import app.readylytics.health.core.model.domain.util.logE
 import app.readylytics.health.core.model.domain.util.logI
@@ -84,6 +85,39 @@ class DailySyncUseCase
         }
 
         /**
+         * Task 5: the earliest day the inline (non-escalated) walk-forward must recompute, widened
+         * so it also satisfies [ScoreInvalidation.exampleFanOutRange]'s dependency -- a corrected or
+         * deleted workout on [outOfWindowAffected] can change which past workouts are eligible as
+         * recommendation examples for [ScoreInvalidation.EXAMPLE_SELECTION_LOOKBACK_DAYS] days after
+         * it. The naive floor (earliest out-of-window affected day, absorbed contiguously through
+         * [today] by this method's caller) already happens to satisfy that dependency today, since
+         * this walk-forward always recomputes through `today` and the fan-out's own end is capped at
+         * `today` too -- but that coverage was previously an *unwritten* invariant of this date
+         * arithmetic, silently broken by any future change that narrows it. Routing the floor through
+         * the shared, tested [ScoreInvalidation] utility instead makes the dependency explicit and
+         * `merge`s in the wider of the two (never narrower, per [ScoreInvalidation.merge]) so a
+         * regression here fails the exact-range assertions in `DailySyncUseCaseTest` instead of
+         * silently letting recommendation examples go stale.
+         */
+        private fun resolveInlineOldestTargetDay(
+            outOfWindowAffected: List<java.time.LocalDate>,
+            standardOldest: java.time.LocalDate,
+            today: java.time.LocalDate,
+            prefs: UserPreferences,
+        ): java.time.LocalDate {
+            val naiveOldest = outOfWindowAffected.minOrNull() ?: return standardOldest
+            val retentionStart = RetentionBounds.resolveResyncStartDate(prefs, today)
+            val exampleFanOut =
+                ScoreInvalidation.merge(
+                    outOfWindowAffected.map { ScoreInvalidation.exampleFanOutRange(it, today, retentionStart) },
+                )
+            return ScoreInvalidation
+                .merge(ScoreInvalidation.AffectedRange(naiveOldest, today), exampleFanOut)
+                ?.start
+                ?: naiveOldest
+        }
+
+        /**
          * @param onProgress optional reactive hook invoked as the walk-forward recompute advances,
          *   reporting (phase, current, total) so the UI can surface progress instead of a silent
          *   spinner. Invoked off the main thread. Unlike the historical resync, daily sync's HR/HRV
@@ -139,7 +173,7 @@ class DailySyncUseCase
                         if (requiresHistoricalResync) {
                             standardOldest
                         } else {
-                            outOfWindowAffected.minOrNull() ?: standardOldest
+                            resolveInlineOldestTargetDay(outOfWindowAffected, standardOldest, today, prefs)
                         }
 
                     val windowEnd = today.plusDays(1).atStartOfDay(zoneId).toInstant()

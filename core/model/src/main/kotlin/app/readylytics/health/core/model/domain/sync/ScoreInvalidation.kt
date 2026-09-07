@@ -56,4 +56,38 @@ object ScoreInvalidation {
 
     /** Vararg overload of [merge]. */
     fun merge(vararg ranges: AffectedRange?): AffectedRange? = merge(ranges.asIterable())
+
+    /**
+     * Task 5: recommendation examples ([app.readylytics.health.core.scoring.domain.recommendation.SelectWorkoutRecommendationExamples]
+     * via `WorkoutExampleLoader`/`MorningRecommendationAssembler`, `core:database`) draw candidate
+     * workouts from a rolling `EXAMPLE_WINDOW_DAYS` (30-day) lookback ending at each day's wake
+     * time. Correcting or deleting a workout can therefore change which examples are eligible for
+     * every day up to [EXAMPLE_SELECTION_LOOKBACK_DAYS] after it -- a *distinct* dependency from
+     * the general scoring-formula lookback [affectedRange] widens for, modeled separately here so a
+     * future change to [MAX_DEPENDENT_WINDOW_DAYS] can never silently under-cover it.
+     */
+    const val EXAMPLE_SELECTION_LOOKBACK_DAYS = 30L
+
+    /**
+     * Bounds the recompute range for a workout correction/deletion on [correctionDate] to the days
+     * whose recommendation examples could have referenced it: `[correctionDate, correctionDate +
+     * EXAMPLE_SELECTION_LOOKBACK_DAYS]`, intersected with `[retentionStart, today]` so the result
+     * never reaches into the future (nothing to recompute there) or before what the app still
+     * retains (nothing there to repair). Returns null when that intersection is empty (e.g. a
+     * correction older than the retention window).
+     *
+     * Purely additive: this must never be used in place of a wider range already computed for
+     * another reason (e.g. [affectedRange]) -- callers holding both should [merge] them, never pick
+     * one over the other, so neither dependency's horizon is ever silently shrunk.
+     */
+    fun exampleFanOutRange(
+        correctionDate: LocalDate,
+        today: LocalDate,
+        retentionStart: LocalDate,
+    ): AffectedRange? {
+        val naiveEnd = correctionDate.plusDays(EXAMPLE_SELECTION_LOOKBACK_DAYS)
+        val start = maxOf(correctionDate, retentionStart)
+        val end = minOf(naiveEnd, today)
+        return if (end.isBefore(start)) null else AffectedRange(start, end)
+    }
 }

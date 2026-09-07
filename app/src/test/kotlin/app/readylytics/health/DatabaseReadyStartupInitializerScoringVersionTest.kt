@@ -52,6 +52,19 @@ class DatabaseReadyStartupInitializerScoringVersionTest {
         }
 
     @Test
+    fun versionFourNeedsRecommendationBackfill() =
+        runTest {
+            // Task 5: version 4 predates workout-recommendation assembly (v5). Existing users
+            // stored at v4 must get one recompute-only pass to backfill it.
+            val scheduler = FakeWorkerScheduler()
+            val initializer = initializerWith(storedScoringVersion = 4, scheduler = scheduler)
+
+            initializer.initializeIfReady(DatabaseReadiness.Ready)
+
+            assertEquals(1, scheduler.recomputeOnlyRequests)
+        }
+
+    @Test
     fun `current scoring version does not enqueue a recompute`() =
         runTest {
             val scheduler = FakeWorkerScheduler()

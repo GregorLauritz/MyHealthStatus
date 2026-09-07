@@ -131,6 +131,14 @@ class ScoringRepositoryImplTest {
             scoringHistoryRepository,
             readinessSummaryCoordinator,
             dispatcher,
+            MorningRecommendationDependencies(
+                sleepSessionRepository = mockk(relaxed = true),
+                computeSleepMetricsUseCase = mockk(relaxed = true),
+                hrvResolver = mockk(relaxed = true),
+                workoutRepository = mockk(relaxed = true),
+                dailySummaryRepository = mockk(relaxed = true),
+                getWorkoutDisplayMetricsUseCase = mockk(relaxed = true),
+            ),
         )
     }
 

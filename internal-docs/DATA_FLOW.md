@@ -54,7 +54,7 @@ Paths below are rooted at the project root. Module prefixes are explicit, for ex
                │   columns in place, near-no-op on identical re-ingest; others: @Upsert on stable id
                ▼
 ┌──────────────────────────────┐
-│  HealthDatabase (SQLite v18) │   18 entities — single source of truth
+│  HealthDatabase (SQLite v19) │   18 entities — single source of truth
 └──────────────┬───────────────┘
                │ raw DAO reads (local; no further HC calls)
                ▼
@@ -125,7 +125,7 @@ explicit and idempotent.
 | `DailyRecomputeSupport`       | `core/healthconnect/src/main/kotlin/app/readylytics/health/core/healthconnect/domain/sync/DailyRecomputeSupport.kt`       | Shared per-day helpers: `recomputeDay(day, steps)` → `ScoringRepository.computeAndPersistDailySummary` (single point of daily score persistence; no math here), and `refreshAutoMaxHr(prefs)`. **PERF-002/WP-20/WP-22:** every multi-day walk-forward (both `DailySyncUseCase.run` and `ResyncRangeUseCase`'s RECOMPUTE phase) instead calls `buildWalkForwardTrimpContext`/`buildWalkForwardBaselineContext`/`buildWalkForwardVo2MaxContext` once up front, then `recomputeDay(day, steps, prefs, contexts)` per day with one shared `WalkForwardContexts` holder (`trimp`/`baseline`/`fatigue`/`vo2Max`, each nullable; a single overload — the old partially-populated variants were a latent per-day-requery trap) — `ScoringRepositoryImpl` slices that shared in-memory state per day instead of each day independently re-querying its own 84-day TRIMP window, 30-/56-day baseline window, or 30-day VO2 Max window; math is unchanged, only the I/O is batched. Also owns `inRecomputeTransaction { }`, the single place either sync path opens a recompute transaction (F7). Reads inside it observe the transaction's own uncommitted writes, which the walk-forward requires (day N sums days N-1..N-6 and reads day N-1). |
 | `ForegroundSyncController`    | `core/healthconnect/src/main/kotlin/app/readylytics/health/core/healthconnect/domain/sync/ForegroundSyncController.kt`    | Foreground state + progress bridge. `triggerDailySync()` = pull-to-refresh (current day only, `windowDays = 1`); `triggerImmediateSync()` = first-launch catch-up; `onBackgroundRecalc{Started,Progress,Finished}()` publish WorkManager job progress into `isSyncing` / `recalcProgress` StateFlows + `syncCompletedEvent`. A `DEFERRED_DAILY_SYNC` failure result (dense daily window that timed out even after its extended-budget retry) is logged and dropped — no `getOrThrow()`, no historical-worker escalation, no completion event. |
 | `FullHistoricalResyncUseCase` | `core/healthconnect/src/main/kotlin/app/readylytics/health/core/healthconnect/domain/sync/FullHistoricalResyncUseCase.kt` | Snapshots preferences once, resolves one `RetentionBounds.HistoricalWindow` from the current instant in that snapshot's stored scoring timezone, and delegates its inclusive `startDate..endDate` to `HealthSyncUseCase.resyncRange`. The window also carries the exact scoring-zone `startTimeMs` used by cleanup and the startup canonical-TRIMP gate, so date and instant boundaries cannot diverge when the device zone differs. Checkpoint/resume behavior stays in the sync engine; no math. `execute(recomputeOnly = false, rangeOverride = null, onProgress)`: when `recomputeOnly` (see 1.2.2) delegates to `HealthSyncUseCase.recomputeRange(start, end, onProgress)` instead of `resyncRange`; a non-null `rangeOverride` (R2-CACHE-001, e.g. from `ScoreInvalidation.affectedRange`) further narrows that recompute-only start/end, each independently clamped into the resolved retention window with `coerceAtLeast`/`coerceAtMost` (retention may have shrunk between worker enqueue and run time). `rangeOverride` is ignored for a full (non-recomputeOnly) resync, which always covers the whole retention window. `executeTrainingReadinessProjection(config)` resolves the same retention window under `syncMutex` and delegates only to the retained-summary projection use case: no Health Connect, raw DAO, TRIMP, load-EMA, or fatigue work. |
-| `HealthResyncWorker`          | `app/src/main/kotlin/app/readylytics/health/workers/HealthResyncWorker.kt`              | Before resolving its lazy Room-backed `FullHistoricalResyncUseCase` or lazy `ForegroundSyncController`, it requires `DatabaseReadiness.Ready`; otherwise it retries without opening Room or constructing the controller graph. Once ready, this `@HiltWorker` durable foreground service (`FOREGROUND_SERVICE_TYPE_DATA_SYNC`) runs the resync use case, emits `WorkInfo` progress (`setProgressAsync`), posts a determinate "day X of Y" notification, and bridges progress to `ForegroundSyncController`; on success, `persistPostRecomputeState()` bumps `UserPreferences.scoringVersion` (if stale) and snapshots the sleep scoring inputs into `last_recalc_*` on `user_preferences` (both full resync and recompute-only). `Result.retry()` on transient failure, but confirmed permission failures stop with `Result.failure()` so WorkManager does not loop. Checkpoints remain available for a new sync after access is restored. Reads the boolean `KEY_RECOMPUTE_ONLY` input-data flag (default `false`, see 1.2.2) and forwards it as `FullHistoricalResyncUseCase.execute(recomputeOnly = ...)`. **R2-CACHE-001:** also reads the optional `KEY_RECOMPUTE_START_EPOCH_DAY`/`KEY_RECOMPUTE_END_EPOCH_DAY` epoch-day input-data keys (absent, or a negative start, means "no override") and forwards them as `FullHistoricalResyncUseCase.execute(rangeOverride = ...)` — the same unique `RESYNC_WORK_NAME` worker, no new work name or progress channel. `KEY_RECOMPUTE_MODE = TRAINING_READINESS` selects the parameter-only branch and decodes its immutable S/w input. That branch advances applied S/w only after its single projection transaction commits; failure retries with prior scores and applied preferences intact and does not call `persistPostRecomputeState()`. |
+| `HealthResyncWorker`          | `app/src/main/kotlin/app/readylytics/health/workers/HealthResyncWorker.kt`              | Before resolving its lazy Room-backed `FullHistoricalResyncUseCase` or lazy `ForegroundSyncController`, it requires `DatabaseReadiness.Ready`; otherwise it retries without opening Room or constructing the controller graph. Once ready, this `@HiltWorker` durable foreground service (`FOREGROUND_SERVICE_TYPE_DATA_SYNC`) runs the resync use case, emits `WorkInfo` progress (`setProgressAsync`), posts a determinate "day X of Y" notification, and bridges progress to `ForegroundSyncController`; on success, `persistPostRecomputeState()` bumps `UserPreferences.scoringVersion` (if stale **and** `coversRetainedHistory` -- true for a full resync or an unbounded recompute-only pass, false for one bounded to a range override, see §1.2) and snapshots the sleep scoring inputs into `last_recalc_*` on `user_preferences` (both full resync and recompute-only). `Result.retry()` on transient failure, but confirmed permission failures stop with `Result.failure()` so WorkManager does not loop. Checkpoints remain available for a new sync after access is restored. Reads the boolean `KEY_RECOMPUTE_ONLY` input-data flag (default `false`, see 1.2.2) and forwards it as `FullHistoricalResyncUseCase.execute(recomputeOnly = ...)`. **R2-CACHE-001:** also reads the optional `KEY_RECOMPUTE_START_EPOCH_DAY`/`KEY_RECOMPUTE_END_EPOCH_DAY` epoch-day input-data keys (absent, or a negative start, means "no override") and forwards them as `FullHistoricalResyncUseCase.execute(rangeOverride = ...)` — the same unique `RESYNC_WORK_NAME` worker, no new work name or progress channel. `KEY_RECOMPUTE_MODE = TRAINING_READINESS` selects the parameter-only branch and decodes its immutable S/w input. That branch advances applied S/w only after its single projection transaction commits; failure retries with prior scores and applied preferences intact and does not call `persistPostRecomputeState()`. |
 | `DatabaseMigrationWorker` / `DatabaseMigrationController` | `app/src/main/kotlin/app/readylytics/health/workers/DatabaseMigrationWorker.kt`; `app/src/main/kotlin/app/readylytics/health/domain/migration/DatabaseMigrationController.kt` | The required external v7 migration runs as its own non-expedited unique one-time foreground work (`database_v7_migration`, `ExistingWorkPolicy.KEEP`, exponential backoff, `FOREGROUND_SERVICE_TYPE_DATA_SYNC`). It publishes phase and copied/total-row `WorkInfo` progress through a migration-specific notification/channel; insufficient-space bytes are terminal failure output, ordinary migration failure retries, and cancellation is rethrown. The controller combines the pre-Room readiness inspection with this unique-work progress in a `StateFlow`; migration progress is deliberately separate from historical health-resync progress. |
 | `MainActivity` / `HealthDashboardApplication` startup gate | `app/src/main/kotlin/app/readylytics/health/MainActivity.kt`; `app/src/main/kotlin/app/readylytics/health/HealthDashboardApplication.kt`; `app/src/main/kotlin/app/readylytics/health/DatabaseReadyStartupInitializer.kt` | Both entry points observe the domain-facing `DatabaseMigrationController` before resolving Room-backed graphs. `MainActivity` renders a blocking Material 3 migration screen for every non-ready state through the dependency-free `DatabaseReadinessTheme`, starts/resumes required migration once from `LaunchedEffect`, and creates the preference-backed `ThemeViewModel`, `SyncViewModel`, or resolves the lazy `LocalRestoreManager` only in the `Ready` branch. The application injects `HealthSyncUseCase`, `BackfillHistoricalBaselinesUseCase`, and the broad `SettingsRepository` as `dagger.Lazy`; settings are indirectly Room-backed through `UIPreferences` → `HealthDeviceRepository` → DAOs, so the initializer resolves all three lazies only after `DatabaseReadiness.Ready`. An `AtomicBoolean`-guarded initializer then runs baseline backfill under `syncMutex` and schedules backup, birthday, and cleanup work exactly once per completed process initialization. It enqueues one durable background recompute (`WorkerScheduler.scheduleResyncWorker(recomputeOnly = true)`) when either `storedScoringVersion < CURRENT_SCORING_VERSION` or a workout inside `RetentionBounds.resolveHistoricalWindow(prefs).startTimeMs..` still has `modelTrimp IS NULL`; the worker owns convergence and the version bump. Scoring version 4 uses this ordinary retained walk-forward—not the parameter-only projection branch—so existing v17 rows rebuild Residual Fatigue chronologically and receive default projections. Only successful worker completion records version 4/applied defaults. The backfill gate uses the same stored-scoring-zone instant as cleanup and the worker's recompute start, never device/system midnight. Periodic sync is scheduled at the stored interval only when `backgroundSyncEnabled`; otherwise its unique work is cancelled. An ordinary incomplete initialization resets the guard and returns a retryable status; the application coordinator retries at bounded 500 ms / 2 s / 8 s delays while the current readiness remains Ready, without depending on another equal `StateFlow` emission. `collectLatest` cancels that retry chain as soon as readiness changes; cancellation resets the guard and is always rethrown. A v5/v6 database therefore cannot be opened indirectly by normal startup while the external migration owns the file. |
 | `WorkerScheduler`             | `core/model/src/main/kotlin/app/readylytics/health/core/model/workers/WorkerScheduler.kt`                 | Enqueues unique work. `scheduleDatabaseMigration()` owns the distinct v7 migration chain described above. `scheduleResyncWorker(recomputeOnly = false, startDate = null, endDate = null)` uses the shared `RESYNC_WORK_NAME` chain, expedited execution, and exponential backoff; explicit full resync uses `ExistingWorkPolicy.KEEP`, while recompute-only settings requests use `ExistingWorkPolicy.APPEND_OR_REPLACE` to append a durable successor. The request type is passed through as `KEY_RECOMPUTE_ONLY` input data (see 1.2.2). **R2-CACHE-001:** `startDate`/`endDate`, when both non-null, carry a bounded recompute-only date range (as epoch days, `KEY_RECOMPUTE_START_EPOCH_DAY`/`KEY_RECOMPUTE_END_EPOCH_DAY` input data) through to `HealthResyncWorker`/`FullHistoricalResyncUseCase`; left `null` (every pre-existing call site), the recompute-only pass keeps covering the full retention window as before. `DataRollupWorker`/`DataCleanupWorker` are the two callers that pass a range, from `ScoreInvalidation.affectedRange`. Multiple rapid settings changes may create redundant local passes, but the newest preferences are eventually captured without adding a second work name or progress channel. `scheduleTrainingReadinessRecompute(config)` captures immutable S/w in a `TRAINING_READINESS` request on the same unique chain with `APPEND_OR_REPLACE`; it adds no new work name or progress channel. Also provides `cancelResyncWorker()`; `schedulePeriodicSync(intervalMinutes)` (`PERIODIC_SYNC_WORK_NAME`, `ExistingPeriodicWorkPolicy.UPDATE`, exponential backoff, requires battery not low but no charging or device-idle constraint) + `cancelPeriodicSync()`; and backup / birthday / data-cleanup workers. |
@@ -135,7 +135,7 @@ explicit and idempotent.
 | `DataRollupWorker`            | `app/src/main/kotlin/app/readylytics/health/workers/DataRollupWorker.kt`                | Daily hot→warm rollup; resolves the 90-day `RetentionBounds.resolveHotTierCutoffMs()` and delegates to `DataRollupManager`. `Result.retry()` on transient failure. **R2-CACHE-001:** on a non-empty touch, enqueues a bounded recompute-only resync (`WorkerScheduler.scheduleResyncWorker(recomputeOnly = true, startDate, endDate)`) over `ScoreInvalidation.affectedRange(touched, today)` — same edge as `DataCleanupWorker`, above. A no-op rollup enqueues nothing. |
 | `DataRollupManager`           | `core/database/src/main/kotlin/app/readylytics/health/core/database/data/local/DataRollupManager.kt`  | Atomically downsamples plausibility-filtered raw `heart_rate_records` older than the cutoff into `hr_minute_buckets` (min/max/avg/count plus a p5/p25/p50/p75/p95 percentile sketch, computed in Kotlin via `MinuteBucketAggregator` since SQLite has no `PERCENTILE_CONT`) then deletes the raw rows, day-chunked (R2-DB-004). **R2-CACHE-001:** `rollupExpiredHotTier` returns the `ScoreInvalidation.AffectedRange?` it actually touched (min/max dates of every rolled-up raw sample, merged across day-chunks), or `null` on a no-op run. |
 | `RetentionCleanup`            | `core/database/src/main/kotlin/app/readylytics/health/core/database/data/local/RetentionCleanup.kt`             | Executes deletions of data strictly older than the cutoff across all 13 sensitive tables. **DB-002:** `heart_rate_records` and `hrv_records` (the two high-volume tables) are deleted via `deleteBeforeTimestampBatch`, each call bounded to 10,000 rows and run in its own transaction, looping until a batch returns fewer than 10,000 deletes — so a large first-time cleanup opens many bounded transactions instead of one unbounded delete/WAL growth spike, and a killed worker mid-loop leaves already-deleted rows deleted (idempotent restart: `WHERE timestampMs < cutoff` simply matches fewer rows next time). The remaining 11 low-volume tables (`sleep_sessions`, `hr_minute_buckets`, `workout_records`, `daily_summaries`, `weight_records`, `body_fat_records`, `blood_pressure_records`, `oxygen_saturation_records`, `body_temperature_records`, `step_records`, `vo2_max_records`) are deleted together in one single transaction, as before. **R2-CACHE-001:** `deleteBefore` returns the `ScoreInvalidation.AffectedRange?` it actually touched — the earliest pre-deletion timestamp across `heart_rate_records`/`hr_minute_buckets` (the two sources that feed the scoring walk-forward and change size with the rolling cutoff) through `cutoffMs`, read before deletion — or `null` when nothing was older than the cutoff. |
-| `ScoreInvalidation`           | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/sync/ScoreInvalidation.kt`             | Pure Kotlin, zero Android dependencies. `AffectedRange(start, endInclusive)` plus `affectedRange(changed, today)`, which widens a touched range forward by `MAX_DEPENDENT_WINDOW_DAYS` (84 — the longest scoring lookback: the 84-day TRIMP fetch window) and caps the result at `today`. Bridges `DataRollupManager`/`RetentionCleanup's touched-range output to the bounded recompute-only resync both workers enqueue (see `DataRollupWorker`/`DataCleanupWorker`, above, and `WorkerScheduler.scheduleResyncWorker`'s `startDate`/`endDate` params below). A depth-guard test enumerates every scoring lookback constant (`ACUTE_DAYS`, `CHRONIC_DAYS`, `BASELINE_DAYS`, `HRV_SIGMA_WINDOW_DAYS`, `CIRCADIAN_CONSISTENCY_WINDOW_DAYS`, `MATURE_DATA_TENURE_DAYS`, the 84-day TRIMP fetch) and fails the build if any exceeds `MAX_DEPENDENT_WINDOW_DAYS`. |
+| `ScoreInvalidation`           | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/sync/ScoreInvalidation.kt`             | Pure Kotlin, zero Android dependencies. `AffectedRange(start, endInclusive)` plus `affectedRange(changed, today)`, which widens a touched range forward by `MAX_DEPENDENT_WINDOW_DAYS` (84 — the longest scoring lookback: the 84-day TRIMP fetch window) and caps the result at `today`. Bridges `DataRollupManager`/`RetentionCleanup's touched-range output to the bounded recompute-only resync both workers enqueue (see `DataRollupWorker`/`DataCleanupWorker`, above, and `WorkerScheduler.scheduleResyncWorker`'s `startDate`/`endDate` params below). A depth-guard test enumerates every scoring lookback constant (`ACUTE_DAYS`, `CHRONIC_DAYS`, `BASELINE_DAYS`, `HRV_SIGMA_WINDOW_DAYS`, `CIRCADIAN_CONSISTENCY_WINDOW_DAYS`, `MATURE_DATA_TENURE_DAYS`, the 84-day TRIMP fetch) and fails the build if any exceeds `MAX_DEPENDENT_WINDOW_DAYS`. **Task 5:** also `exampleFanOutRange(correctionDate, today, retentionStart)` — a second, additive dependency (`EXAMPLE_SELECTION_LOOKBACK_DAYS` = 30, its own depth-guard against `MAX_DEPENDENT_WINDOW_DAYS`) for recommendation-example eligibility (§2.11.3/§1.2's correction-fan-out paragraph), bounding `[correctionDate, correctionDate + 30]` to `[retentionStart, today]`. Wired into `DailySyncUseCase.resolveInlineOldestTargetDay`, merged alongside the naive out-of-window-affected-date floor. |
 | `RetentionBounds`             | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/util/RetentionBounds.kt`             | Single source of truth for retention→date/instant math. `resolveHistoricalWindow(prefs, now)` derives `endDate` in `prefs.scoringZone()`, then enabled → `startDate = endDate − retentionDays`, disabled → `endDate − ABSOLUTE_MAX_DAYS` (3650 / 10y), and binds that date to scoring-zone midnight as `startTimeMs`. Inclusion is `workout.startTime >= startTimeMs`; cleanup deletes the complementary `< startTimeMs` set. Also owns the fixed 90-day hot/warm boundary (`HOT_TIER_WINDOW_DAYS`, `resolveHotTierCutoffMs`). |
 | `RoomTransactionRunner`       | `core/database/src/main/kotlin/app/readylytics/health/core/database/data/local/RoomTransactionRunner.kt`        | Wraps `HealthDatabase.withTransaction { … }`. Ingestion commits parent/low-volume records together, then HR and HRV in bounded 500-row transactions with cancellation checks between batches. A failed window may contain partial new upserts, but never deletes prior valid rows; its unchanged checkpoint causes an idempotent replay. Also wraps the sync/resync walk-forward recompute via `DailyRecomputeSupport`. |
 | `HealthChangeSynchronizer`    | `core/healthconnect/src/main/kotlin/app/readylytics/health/core/healthconnect/domain/sync/HealthChangeSynchronizer.kt`    | Reconciles differential Health Connect Changes API responses (upsertions and deletions) incrementally during daily/foreground sync. As of R2-ARCH-002, this path shares the same persistence boundary as the bulk/resync path (`HealthIngestionCoordinator`), split across two ports to keep both under detekt's function-count limit — `HealthChangeSynchronizerImpl` holds no DAO reference and no `Context`; it persists via the existing `HealthIngestionStore` (`persist`/`persistHeartRateSamples`/`persistHrvSamples`, unchanged) and resolves per-record delete/date-lookup via the new `HealthChangeIngestionStore.affectedDatesForRecord`/`deleteRecord`, session linkage via `HealthChangeIngestionStore.sessionSpansOverlapping` (hoisted once per changes page, R2-HC-003), and provisional workout metrics via `HealthChangeIngestionStore.heartRateSamplesForMetrics`. HR/HRV/exercise upserts resolve real overlapping sleep/workout session spans and, for exercise, real stored HR samples, so a changes-path row is link/metric-correct at write time rather than only after the next `DailySyncUseCase` reconcile pass (HC-004). The synchronizer returns candidate next tokens but never persists them; the daily-sync flow (`DailySyncUseCase`) commits them only after requested-window ingest, reconciliation, step fetch, and scoring all succeed. Changes older than the requested scoring window leave tokens uncommitted and return `REQUIRES_HISTORICAL_RESYNC`, routing correction through the durable worker without widening foreground scoring. |
@@ -388,7 +388,13 @@ Version 17 (`Migration16To17`) adds nullable Training Readiness projection colum
 Version 18 (`Migration17To18`) adds the `vo2_max_records` table and index (`index_vo2_max_records_timestampMs`)
 for VO2 max ingestion from Health Connect, and adds nullable `vo2Max` and `vo2MaxSource` columns to
 `daily_summaries`; existing rows remain null until populated.
-The current Room schema version = 18.
+Version 19 (`Migration18To19`) adds one nullable `daily_summaries.workoutRecommendationJson` TEXT column
+(`ALTER TABLE daily_summaries ADD COLUMN workoutRecommendationJson TEXT DEFAULT NULL`) holding the
+opaque encoded `WorkoutRecommendationSnapshot` for the day (see "Morning workout recommendation
+persistence" below); existing rows remain null until a future recompute populates them, and a null
+value there means "not calculated yet," distinct from an assembled snapshot whose decision itself is
+an unavailable state (e.g. `CALIBRATING`).
+The current Room schema version = 19.
 
 **Workout distance and elevation come from separate records, not the session.** An
 `ExerciseSessionRecord` carries no distance — the recording app writes `DistanceRecord` and
@@ -506,7 +512,7 @@ per-bucket (min/avg/max or percentile) replay values are unchanged.
 | `BloodPressureRecordEntity`    | `blood_pressure_records`    | `id: String` (composite)               | systolic/diastolic, `timestampMs`, `deviceName`                                                                                                           |
 | `OxygenSaturationRecordEntity` | `oxygen_saturation_records` | `id: String` (composite)               | %, `timestampMs`, `deviceName`                                                                                                                            |
 | `BodyTemperatureRecordEntity`  | `body_temperature_records`  | `id: String` (composite)               | `celsius`, `timestampMs`, `deviceName`                                                                                                                     |
-| `DailySummaryEntity`           | `daily_summaries`           | `dateMidnightMs: Long`                 | computed scores (sleep/load/readiness), frozen baselines (`hrv_mu_mssd`, `hrv_sigma_mssd`, `rhr_bpm`, `rhr_sigma`, `hr_max`, …), weight/BP/SpO2/body-temp snapshots (`avgSleepingBodyTemp` — nightly average, never a scoring input), VO2 max snapshot (`vo2Max`, `vo2MaxSource`) |
+| `DailySummaryEntity`           | `daily_summaries`           | `dateMidnightMs: Long`                 | computed scores (sleep/load/readiness), frozen baselines (`hrv_mu_mssd`, `hrv_sigma_mssd`, `rhr_bpm`, `rhr_sigma`, `hr_max`, …), weight/BP/SpO2/body-temp snapshots (`avgSleepingBodyTemp` — nightly average, never a scoring input), VO2 max snapshot (`vo2Max`, `vo2MaxSource`), morning workout guidance (`workoutRecommendationJson` — opaque, encoded/decoded only via `WorkoutRecommendationCodec`, null means "not calculated yet") |
 | `Vo2MaxRecordEntity`           | `vo2_max_records`           | `id: String` (HC id)                   | `timestampMs`, `vo2Max` (mL/kg/min), `measurementMethod` (nullable), `deviceName`                                                                         |
 | `InsightDismissalEntity`       | `insight_dismissals`        | `(dateMidnightMs: Long, type: String)` | `type: String` (LATE_NADIR, SICK_INDICATOR, STRONG_RECOVERY_SIGNAL, LOAD_SPIKE_RECOVERY_STRAIN, …) — represents dismissed dashboard insights                                                       |
 | `AuditEventEntity`             | `audit_events`              | `id: Long` (auto)                      | `type`, `occurredAtEpochMs`, optional coarse `detail` for local backup/restore/key-lifecycle events                                                       |
@@ -525,7 +531,11 @@ Sleep/heart-rate/HRV/workout/daily-summary tables are cleared and replaced uncon
 restore (their keys have been present in every supported backup format). The six raw-vitals tables
 (weight, body fat, blood pressure, SpO2, body temperature, steps) are cleared and replaced only when
 their corresponding JSON key is present in the backup being restored, so restoring an older backup
-that predates these tables leaves the current local rows for them untouched.
+that predates these tables leaves the current local rows for them untouched. Immediately after that
+commit, `LocalRestoreManager` also checks whether every restored `daily_summaries` row carries a
+recommendation payload `WorkoutRecommendationCodec` still recognizes (never trusting the restored
+`scoringVersion` preference for this — see §1.2's scoring-version-5 paragraph) and enqueues a
+recompute-only backfill if not; this is a background follow-up, never a restore failure.
 For v5/v6 payloads, legacy HR/HRV composite IDs normalize to
 `(sourceRecordId, timestampMs)` by removing only an exact trailing `_<timestampMs>` suffix.
 As of v10, backups also carry `health_source_records` and `hr_minute_buckets`; HR/HRV rows
@@ -832,6 +842,91 @@ branch: v16 rows have no retained projection to update. `HealthResyncWorker.pers
 bumps the stored version to 4 and initializes the last-applied Training Readiness defaults only after
 that ordinary worker succeeds; failure leaves the version stale so startup retries (see §1.2.2 and the
 startup-gate row in §1.2).
+
+Wiring `MorningRecommendationAssembler` into every `computeDailySummary` call (§2.11.5) raises the
+current scoring version to **5**: the same startup gate enqueues the same recompute-only resync
+whenever `storedScoringVersion < CURRENT_SCORING_VERSION`, including for existing users stored at 4,
+so their retained history backfills `workoutRecommendationJson` via the ordinary walk-forward — no
+separate backfill worker or progress channel. `HealthResyncWorker.persistPostRecomputeState()` gates
+the version bump on a new `coversRetainedHistory` check: it is `true` for a full Health Connect resync
+(always covers `[retentionStart, today]` regardless of any range override) and for a recompute-only
+pass with no range override (also always the full retention window), but `false` for a recompute-only
+pass **bounded** to a narrower range — a settings-driven recompute, `DataCleanupWorker`'s
+retention-shrink fan-out, or a workout correction's example fan-out (below). This prevents a bounded
+pass from falsely marking version 5 (and therefore "every retained day has a recommendation") complete
+merely because it happened to run while the stored version was stale; only a run that provably spans
+the full retention window through today may advance it. A killed or failed pass of either kind leaves
+the version unchanged, so a later full/unbounded run (or another launch's startup gate) still converges
+it.
+
+**Correction/deletion example fan-out.** Correcting or deleting a workout can change which historical
+workouts are eligible as recommendation examples (§2.11.3's 30-day lookback) for every day up to 30
+days after it. `ScoreInvalidation.exampleFanOutRange(correctionDate, today, retentionStart)`
+(`core/model/.../domain/sync/ScoreInvalidation.kt`) models this as a dependency distinct from the
+general scoring-formula lookback `ScoreInvalidation.affectedRange` widens for (`EXAMPLE_SELECTION_LOOKBACK_DAYS`
+= 30, well inside `MAX_DEPENDENT_WINDOW_DAYS` = 84): it bounds the recompute range to
+`[correctionDate, correctionDate + 30 days]` intersected with `[retentionStart, today]`, returning
+`null` when that intersection is empty (e.g. a correction older than retention). It is purely
+additive — callers holding both a general `affectedRange` and this fan-out range must `merge` them
+rather than pick one, so neither dependency's horizon is ever silently shrunk.
+
+**Real call site:** `DailySyncUseCase.resolveInlineOldestTargetDay` (private,
+`core/healthconnect/.../domain/sync/DailySyncUseCase.kt`), which computes the earliest day the
+foreground daily sync's inline (non-escalated) walk-forward must recompute for an out-of-window
+Health Connect change (`HealthChangeSyncOutcome.affectedDates` — a corrected/deleted workout among
+them). It `merge`s `exampleFanOutRange` for every such affected date into the naive floor
+(`outOfWindowAffected.minOrNull()`) rather than trusting that floor alone, so the dependency is an
+explicit, tested call rather than an unwritten property of ad hoc date arithmetic. As of this
+writing that merge is a **provable no-op**: `outOfWindowAffected.minOrNull()` is already ≤ every
+`exampleFanOutRange(date, ...).start` (since `naiveOldest ≤ date ≤ max(date, retentionStart)` for
+every `date` in the same set), and the inline walk-forward already recomputes through `today` —
+exactly `exampleFanOutRange`'s own capped upper bound — regardless of this merge. Deleting this
+wiring therefore cannot be caught by a *value* regression today (`DailySyncUseCaseExampleFanOutTest`
+pins the reachable range, but the identical range is also produced without the merge); it protects
+against the wiring being *removed from the call graph entirely* (a compile-time dependency) and
+serves as executable documentation of the invariant for whichever future change (e.g. an in-app
+workout edit/delete feature, or a change to how far the inline walk-forward widens) could make it
+load-bearing for real. Both a full historical resync (always `[retentionStart, today]`) and an
+escalated correction (deferred to that same full resync via `REQUIRES_HISTORICAL_RESYNC`) satisfy
+the same dependency through an entirely separate mechanism — always ending at `today` — so this
+wiring's practical value today is discoverability and future-proofing, not active protection.
+Either way, this recompute never triggers a Health Connect fetch merely to repair examples: both
+the inline daily-sync walk-forward and the full/escalated resync recompute purely from rows already
+in Room (`ScoringRepositoryImpl.computeDailySummary`, §2.11.5) — widening `exampleFanOutRange`
+changes which local days get re-evaluated, never whether Health Connect is queried again.
+
+**Restore compatibility.** `LocalRestoreManager` no longer trusts a restored backup's `scoringVersion`
+preference to decide whether recommendations need backfilling — a backup can be internally
+inconsistent (e.g. it predates a rule-version bump the restored `scoringVersion` doesn't reflect), and
+a pre-v19-schema backup carries no `workoutRecommendationJson` column at all. Instead, a dedicated
+`RestoreRecommendationCoverageChecker` inspects the restored `daily_summaries` rows directly, bounded
+to *retained* rows (`RetentionBounds.resolveRetentionCutoffMs`, reading whatever preferences are in
+effect at check time) — a row already outside retention can never be repaired by the retention-bounded
+recompute this schedules anyway, so it must never be why a restore triggers one. If **no** retained row
+carries a payload that survives `WorkoutRecommendationCodec.decode` (all absent, or all rejected for an
+unrecognized `ruleVersion`/invariant violation) — i.e. the restored database predates the feature
+entirely — it enqueues the same `scheduleResyncWorker(recomputeOnly = true)` full-retention recompute
+used by the ordinary version-gate. The test is deliberately "none covered", not "any row uncovered":
+a single uncovered day is not evidence a backup predates the feature, and it is not necessarily
+repairable — a day whose morning sleep-metrics pass fails legitimately stores no snapshot (§2.11.2),
+deterministically, for the same stored rows — so an "any" test would re-schedule a full recompute on
+*every* restore of that database, forever, for a day whose answer can never change. The narrower test
+costs the partially-covered-restore case: when the restored `scoringVersion` is stale (an interrupted
+backfill), `DatabaseReadyStartupInitializer`'s version gate still re-enqueues the same recompute on the
+next launch, so that case converges regardless of this checker. If the restored `scoringVersion`
+already reads `CURRENT_SCORING_VERSION` — an internally inconsistent backup, or a source device that
+legitimately reached it with a transiently-failing day mixed among successful ones — neither gate
+fires, and the affected day stays `null` until the user runs a manual "Resync Health Connect data."
+This is the same accepted trade-off as an on-device transient failure (§2.11.2): staleness over a
+fabricated explanation, not a new class of gap introduced by restore. This runs **after** preferences
+restore succeeds (or from the failure branch, if preferences restore itself fails) — never before —
+so the retention-bounded check reads the just-restored preferences (scoring zone, retention window)
+rather than risking the worker starting against a pre-restore configuration mid-write. This is a
+coverage check over the actual restored data, never a blanket "drop all scoring data and start over,"
+so restoring a completely pre-recommendation backup still succeeds immediately and just backfills in
+the background afterward — restore never fails on account of it. A backfill triggered this way
+converges through the same `CURRENT_SCORING_VERSION` marker as the normal upgrade path once the
+worker's recompute actually covers full retained history.
 
 **PERF-002/WP-20 — batched TRIMP series in the walk-forward.** The ATL/CTL/strain-ratio/load-score
 assembly for both the workout-only and everyday-HR series is extracted from
@@ -1219,7 +1314,7 @@ The calculation is always on; users can optionally visualize Residual Fatigue ac
    - `GetCurrentResidualFatigueUseCase` returns a tri-state `LiveResidualFatigue`, which `DashboardMetricPresentationFactory` maps as follows. `NotApplicable` (selected day already ended) -> the persisted end-of-day snapshot `DailySummary.residualFatigue`. `Value` (current day) -> live fatigue from `ScoringRepository.computeCurrentResidualFatigue` -> `ResidualFatigueComputer.computeLive(nowMs, prefs)`, which evaluates exponential decay through the current instant rather than tonight's midnight, on the same basis as the Workouts tab decay chart's "now" dot and without mutating `daily_summaries` or the walk-forward accumulator. `Unavailable` (current day, but `computeLive` gated or the lookup threw) -> **NO_DATA**.
    - The tri-state is load-bearing, not stylistic: `Unavailable` must never fall back to the snapshot. The two never-backfilled gates differ — `computeLive` uses `loadUnbackfilledCountThrough(retentionStart, nowMs)` (`endTime <= nowMs`), the snapshot uses `loadUnbackfilledCountBefore(retentionStart, dayStart)` (`startTime < dayStart`). A workout *ending today* with a null `modelTrimp` therefore trips the live gate but not the snapshot's, and `getCanonicalFatigueInputsThrough` filters `modelTrimp IS NOT NULL`, so it contributes zero to the snapshot. Falling back would display a silently understated value in exactly the case the HIGH-2 "unknown, not low" gate exists to catch.
    - Refresh cadence: `DashboardFatigueTicker` emits a minute bucket into `DashboardViewModel`'s `combine` (paired with the RAS-increase flow, since the typed `combine` overloads stop at five sources). The bucket is also part of `FatigueCacheKey`, so the value re-decays once a minute while the dashboard is subscribed, and the memo still absorbs the high-frequency data flows in between. `SharingStarted.WhileSubscribed` stops the ticker shortly after the UI goes away and restarts it with a fresh bucket on resubscribe. The lookup is wrapped so a DB failure degrades to `Unavailable` instead of escaping the transform and killing `stateIn`'s sharing coroutine.
-   - Formatted into a `UniversalMetricPresentation`: value formatted to 1 decimal place, unit empty/dimensionless, and secondary text `card_residual_fatigue_secondary` ("Half-life: Xh"). The gauge scale and the status cut-points are **multiplied by the configured `residualFatigueGain`**, because the metric is `gain * sum(TRIMP) * decay` and gain is user-settable over 0.1–5.0: gauge min=0 / max=`100 * gain`, status classification (`< 30 * gain` Optimal, `<= 70 * gain` Neutral, above that Warning, unavailable input NO_DATA). Fixed cut-points would read Optimal with a pinned-to-zero gauge at gain 0.1 and Warning with a saturated gauge at gain 5.0.
+   - Formatted into a `UniversalMetricPresentation`: value formatted to 1 decimal place, unit empty/dimensionless, and secondary text `card_residual_fatigue_secondary` ("Half-life: Xh"). The gauge scale is **multiplied by the configured `residualFatigueGain`** (gauge min=0 / max=`100 * gain`), because the metric is `gain * sum(TRIMP) * decay` and gain is user-settable over 0.1–5.0. Fixed cut-points would read Optimal with a pinned-to-zero gauge at gain 0.1 and Warning with a saturated gauge at gain 5.0. The status classification itself (`< 30 * gain` Optimal, `<= 70 * gain` Neutral, above that Warning, null/non-finite/negative value or non-finite/non-positive gain → NO_DATA) is **not** computed inline here — it lives in the shared pure classifier `ResidualFatigueThresholds.classify(value, gain)` (`core/model/.../domain/scoring/`), and this card calls it rather than duplicating the comparison. `ComputeWorkoutRecommendationUseCase` (§2.11) calls the same classifier for its fatigue-based reason, so the two surfaces cannot drift apart on where "high fatigue" begins.
    - Renders via `UniversalMetricCard` across Gauge, Bar, and Value display modes. Tapping the card navigates to the Workouts tab (`onNavigateToWorkouts`).
 2. **Workouts Residual Fatigue Curve Chart (`WorkoutChartId.RESIDUAL_FATIGUE_CURVE`):**
    - Registered in `WorkoutChartId` and default-hidden in `SettingsDefaults.DEFAULT_WORKOUT_CHARTS` (`isVisible = false`).
@@ -1275,6 +1370,300 @@ Training Stress Balance (TSB) represents readiness based on training load, calcu
   - **-30 to -10:** Fatigued / Overload
   - **< -30:** High Risk / Overreached
 - **UI Presentation:** TSB is shown in the Workouts tab (toggleable) and optionally as a Dashboard card.
+
+### 2.11 Workout Recommendation (HRV-guided)
+
+A daily HRV-guided workout recommendation (Rest / Easy / Harder, plus several "unavailable"
+states) is decided by the pure `ComputeWorkoutRecommendationUseCase` (`core/scoring/.../domain/recommendation/`).
+The evaluator is described first; §2.11.1–§2.11.4 then describe how a morning snapshot is
+assembled around it. Snapshot persistence and Dashboard presentation are separate, later tasks.
+
+**Contract.** `compute(input: WorkoutRecommendationInput): WorkoutRecommendationDecision` performs
+no reads, clock access, Health Connect/Room lookups, or string localization — every field of
+`WorkoutRecommendationInput` (`core/scoring/.../domain/recommendation/`) is a value the caller has
+already resolved for the day in question (nightly HRV, HRV z-score plus its baseline low/high
+bounds, sleep score, residual fatigue plus its configured gain, circadian-baseline availability,
+the day's calibration flag, and the day's `RecoveryFlag` set). A `null` or non-finite number is
+always "unknown", never coerced to a value that happens to read as in-range (e.g. a missing HRV
+z-score is never treated as zero deviation). `WorkoutRecommendationState` and
+`WorkoutRecommendationReason`/`WorkoutRecommendationDecision` live in `core:model`
+(`domain/recommendation/WorkoutRecommendation.kt`) so later persistence/UI tasks can depend on the
+model without pulling in `core:scoring`.
+
+**Availability gate (checked in this fixed order; the first failing check wins).**
+1. No sleep session for the day → `NO_SLEEP`.
+2. Nightly HRV missing, non-positive, or non-finite → `NO_HRV`.
+3. Day still calibrating (`isCalibrating`) → `CALIBRATING`. The seven-day calibration gate itself is
+   computed upstream and handed in as this one boolean; the evaluator has no clock or day-counter of
+   its own and does not re-derive it.
+4. No circadian baseline for the day → `NO_CIRCADIAN_BASELINE`.
+5. HRV z-score or either bound missing/non-finite, or the bounds not strictly ordered
+   (`lowHrvBound < highHrvBound`) → `NO_HRV_BASELINE`.
+
+**Reason collection (only once available), in this fixed order — all are preserved, never short-circuited:**
+1. `RecoveryFlag.ILLNESS_ONSET` present → `POSSIBLE_ILLNESS`. Other `RecoveryFlag` values (strong
+   recovery signal, rest-day success, etc.) do not affect the recommendation.
+2. HRV z-score strictly below `lowHrvBound` → `HRV_LOW`; strictly above `highHrvBound` → `HRV_HIGH`;
+   at either bound is within the usual range (no reason).
+3. Sleep score classified via the existing shared `Float?.scoreStatus()` (`core/model/.../domain/model/MetricStatusExtensions.kt`):
+   `POOR`/`WARNING` → `SLEEP_LOW`; `CALIBRATING` (null/non-finite input) → `SLEEP_SCORE_MISSING`;
+   `NEUTRAL`/`OPTIMAL` → no reason.
+4. Residual fatigue classified via the shared `ResidualFatigueThresholds.classify(residualFatigue, fatigueGain)`
+   (§2.8): `WARNING` → `FATIGUE_HIGH`; `NO_DATA` (null/non-finite/negative value or invalid gain) →
+   `FATIGUE_MISSING`; `OPTIMAL`/`NEUTRAL` → no reason.
+
+**State derivation.** `POSSIBLE_ILLNESS` in the collected reasons → `REST` (still carrying every
+other collected reason, not just illness). Otherwise any non-empty reason list → `EASY`. An empty
+reason list → `HARDER`, and the decision's `reasons` becomes the single-element
+`[WITHIN_USUAL_RANGE]` rather than staying empty, so a Rest/Easy/Harder decision always carries at
+least one reason for display.
+
+#### 2.11.1 Morning snapshot & date anchoring
+
+`MorningRecommendationAssembler` (`core/database/.../data/repository/recommendation/`) composes one
+`WorkoutRecommendationSnapshot` (`core:model`, `domain/recommendation/`) per local scoring day:
+`ruleVersion`, the chosen `wakeSessionId`/`wakeTimeMs`, the `WorkoutRecommendationDecision`, and up
+to three `WorkoutRecommendationExample` rows. It takes the existing `ScoringDayContext` — the same
+per-day context the daily summary pipeline resolves (§2.1) — so the frozen baselines, scoring
+config, and preferences it uses are the day's own, not today's.
+
+**The anchor is a recorded wake time, never a wall clock.** Everything in the snapshot is bounded at
+the end of one selected sleep record:
+
+1. `sleepSessionRepository.getSince(nextDayMidnight − CIRCADIAN_CONSISTENCY_WINDOW_DAYS)` loads the
+   sleep history once, for both the anchor and the bounded scoring pass.
+2. `CircadianWakeBaseline.resolve(...)` (`core/scoring/.../domain/scoring/`) derives the habitual
+   wake time from sessions ending **strictly before the target day starts**, so the day being scored
+   can never define its own "usual". This is the ≥180-minute / ≥3-session / `consistencyBaselineDays`
+   baseline routine extracted from `CircadianConsistencyRepository`, which now calls the same object
+   — the circadian consistency score's own behaviour is unchanged. Fewer than three qualifying
+   nights means *no* baseline; no noon/07:00 default is substituted.
+3. `SelectMorningSleepSession.select(sessions, date, zone, usualWakeMinutes)` (pure,
+   `core/scoring/.../domain/recommendation/`) keeps every record whose **end** falls on the target
+   local date and picks the one whose wake time is closest to the habitual wake time measured
+   **around the clock face** (`min(|Δ|, 1440 − |Δ|)`), tie-breaking by earliest end time then stable
+   id. A later nap therefore cannot displace the morning record merely by being more recent. Source
+   filtering is whatever Room already applied; it is not re-applied here.
+4. With a previously stored snapshot in hand, the assembler keeps its `wakeSessionId` across ordinary
+   daytime appends but re-reads the row, so corrected timestamps/stages are picked up. A source that
+   no longer exists triggers a fresh selection. With no circadian baseline at all, the snapshot still
+   names a source (earliest end, then id) so the unavailable state can be explained — but that
+   degenerate pick is **not** retained: only a `wakeSessionId` that backed an *available*
+   (Rest/Easy/Harder) decision survives the retention rule. Otherwise a day whose baseline later
+   becomes resolvable through backfill would stay anchored to a fallback session (e.g. the 03:00
+   segment of a split night) instead of re-running proper wake-time selection.
+5. No sleep record ending on the date → `wakeSessionId`/`wakeTimeMs` are null and the evaluator is
+   asked with `hasSleep = false`, yielding `NO_SLEEP`.
+
+#### 2.11.2 Bounded recovery inputs (`MorningRecoveryLoader`)
+
+The loader does **not** copy the completed day's stored `zLnHrv`, sleep score, or illness flag:
+those are computed at next-day midnight, where a nap recorded later the same day can still move
+them. Instead it re-runs the *same* `ComputeSleepMetricsUseCase` with the same formulas and a
+narrowed `SleepMetricsRequest`:
+
+- `dayEndMs = wakeTimeMs`, so `resolveBaselineWindow`'s RHR history and HRV μ/σ windows stop at the
+  wake time;
+- `currentSessionIds = { selected session }`, so nightly HRV (`CurrentNightHrvResolver`, floating
+  mean — never a rounded UI value) and nocturnal RHR come from that record alone;
+- `prefetchedSessions` pre-truncated at the wake time, so the regularity modifier's circadian score
+  (`SleepModifierResolver` → `CircadianConsistencyRepository.scoreFor`) cannot see a later nap;
+- `rhrBaselineValue` **re-derived** at the wake time. `ScoringDayContext.initialBaselines.rhrBaselineValue`
+  cannot be forwarded: for an unfrozen day it comes from `computeAdaptiveBaselineRhrBpmBetween(dayMidnight,
+  nextDayMidnight)`, a window that deliberately includes the day's own later sessions, and it becomes
+  `baselineRhrValue` → `zRhr` → `isRhrOptimal` → `RecoveryFlag.ILLNESS_ONSET` → Rest. The loader calls the
+  same method with `toMs = wakeTime`, following `ResolveDailyBaselinesUseCase`'s precedence (user override →
+  computed → `DEFAULT_RHR_BPM`);
+- `forceLiveBaselines = true`, which keeps the pass on live, `dayEndMs`-bounded windows even after the day's
+  baseline has been frozen (below).
+
+**Failure degrades to no snapshot, never to a failed day.** If that `ComputeSleepMetricsUseCase` pass
+returns a failure, `MorningRecoveryLoader` logs it at WARN and returns `null`; `assemble` returns
+`null`; and `ScoringRepositoryImpl` keeps whatever snapshot was already stored for the day
+(`context.dailySummary?.workoutRecommendation`, so a transient failure never *erases* guidance a
+previous run computed), leaving `workoutRecommendation` `null` for a day that never had one. The
+day's own scores are unaffected and still persist. This must not throw: the recommendation is
+assembled *after* the readiness pipeline has produced a complete summary, and throwing would abort
+`computeAndPersistDailySummary` — which during the version 4→5 backfill means one
+deterministically-failing historical day fails the whole retained-history recompute
+(`Result.retry()`, no version bump), and `DatabaseReadyStartupInitializer` re-enqueues the same
+doomed pass on every launch indefinitely. `null` is the existing "no snapshot for this day" value; a
+computation failure is deliberately *not* dressed up as one of the unavailable
+`WorkoutRecommendationState` values, which are user-facing explanations of missing *data*.
+`ComputeSleepMetricsUseCase` rethrows `CancellationException` before it can become a failure result,
+so cancellation still propagates.
+
+**Why the freeze is bypassed here.** Ordinary scoring reads a day's frozen baseline snapshot
+(`hrvMuMssd`/`hrvSigmaMssd`/`rhrBpm`/`rhrSigma`) once `AssembleDailySummaryUseCase` stamps
+`baselineCalculatedAtDate`, and `BaselineComputer`'s `*Between` methods refuse to recompute a frozen day at
+all. But that snapshot was itself computed with `dayEndMs = next-day midnight`. A morning-anchored caller
+that honoured it would silently switch bounding regimes the instant a day froze, so the *first* assembly of
+a day and every *later* replay of the same day could disagree — defeating the reproducibility this section
+exists to guarantee. `SleepMetricsRequest.forceLiveBaselines` (default `false`) and
+`BaselineComputer.computeHrvWindowsBetween`/`computeAdaptiveBaselineRhrBpmBetween`'s `ignoreFrozenSnapshot`
+(default `false`) are the opt-outs that keep the recommendation on one regime. They are only sound because
+the recomputed values feed the evaluator alone and are never written back into `daily_summaries`'s frozen
+baseline columns (`hrv_mu_mssd`, `hrv_sigma_mssd`, `rhr_bpm`, `rhr_sigma`, …) or any TRIMP/readiness field —
+those, and the resync's exact-reconstruction guarantees, stay untouched. The *decision* the evaluator
+produces is persisted (§2.11.5, `daily_summaries.workoutRecommendationJson`), but that is a value object
+written once per day's assembly and replaced wholesale on the next one, not fed back into the baseline
+pipeline above.
+
+**Calibration.** `ComputeSleepMetricsUseCase` does not stamp `isCalibrating` on the summary it returns (it
+passes the caller's value straight through), so the loader resolves it through the same `CalibrationGate`
+the daily pipeline uses, with `toMs = wakeTime`. A frozen day short-circuits to calibrated in both paths —
+the freeze stamp is only ever written for a day that already passed this gate.
+
+Beyond `rhrBaselineValue` and `forceLiveBaselines`, no new request fields were needed; `dayEndMs`,
+`currentSessionIds` and `prefetchedSessions` already existed for ordinary daily scoring, which continues to
+pass next-day midnight, the aggregated core cluster, and the walk-forward prefetch.
+
+The remaining inputs: HRV deviation bounds are `EmergencyFlagThresholds.illnessZHrvThreshold` /
+`.strongRecoveryZHrvThreshold` from the **frozen** profile (`DailySummary.snapshotProfile`, rebuilt
+through `ScoringConfigFactory` when it differs from the live preference), so switching profile later
+cannot retroactively move a frozen day's bounds — and a positive strong-recovery flag is never
+treated as permission to train harder, it only defines the upper bound. Residual fatigue comes from
+`ResidualFatigueComputer.computeAt(wakeTimeMs, prefs)` (§2.8), which reuses the exact single-day
+fallback and its never-backfilled gate, never advances the shared day-end walk-forward accumulator,
+and is not persisted; `computeLive` is now a thin alias of it. As described above, a failed
+sleep-metrics pass degrades to no snapshot rather than aborting the day or retrying the outer
+computation; `CancellationException` still propagates throughout.
+
+#### 2.11.3 Historical examples (`WorkoutExampleLoader` → `SelectWorkoutRecommendationExamples`)
+
+Only `EASY` and `HARDER` decisions load examples. The window is `wakeTime − 30 days` through
+`wakeTime`. `WorkoutExampleLoader` narrows candidate rows first (duration > 15 min, non-blank
+exercise type, fully inside the window), fetches the 42-day summary history once per window rather
+than per workout, and runs `GetWorkoutDisplayMetricsUseCase.execute` afresh on every load.
+Classifications are not cached across scoring calls: stable-ID workout replacements, HR-sample
+corrections, and RHR-baseline corrections must all be reflected when examples are recomputed,
+even when workout IDs and preferences remain unchanged.
+
+Both of the assembly's history reads are **bounded at both ends**, via
+`SleepSessionRepository.getInRange`/`DailySummaryRepository.getInRange` (the bounded counterparts of
+`getSince`, matching `WorkoutRepository.getInRange`'s existing shape). The unbounded `getSince` reads
+they replaced returned every row through *today*, so replaying N retained days cost O(N²) row
+materializations — plus, for summaries, a `UserPreferences` read and a `WorkoutRecommendationCodec`
+JSON decode per row — for windows only ~60 and ~42 days wide. The sleep window is
+`[dayEnd − CIRCADIAN_CONSISTENCY_WINDOW_DAYS, dayEnd]` (every consumer already discarded anything
+ending after the day); the summary window ends at the newest candidate workout's local midnight
+(`GetWorkoutDisplayMetricsUseCase` evaluates its ATL/CTL EMA *at* each workout's own date, and this
+loader consumes only `classification.finalLoad`, which does not read the summary history at all). `finalLoad` is that use
+case's canonical `classification.finalLoad` — not a re-derived score — so an example reads exactly
+as the workout does elsewhere; rows with no classification are dropped, and a non-finite or
+non-positive average HR is omitted rather than reported as zero.
+
+The pure `SelectWorkoutRecommendationExamples` then filters by allowed load level (`EASY` →
+`VERY_LIGHT`/`LIGHT`; `HARDER` → `MODERATE`/`HARD`/`VERY_HARD`), sorts by end time descending with
+`workoutId` as the final tiebreak, de-duplicates by exercise type, and takes at most three.
+
+#### 2.11.4 Determinism
+
+A day's snapshot is a function of the stored rows and the wake anchor alone, so computing it once on
+the morning itself and replaying it during a full historical resync produce identical output.
+Concretely: the anchor comes from recorded end times (not `Instant.now()`); the habitual wake time
+uses only strictly-earlier days; every read is bounded at the wake time; residual fatigue is
+evaluated at the wake time through the exact reconstruction path; and every ordering has a stable
+final tiebreak. A nap recorded that afternoon and a workout recorded that evening leave the complete
+snapshot byte-for-byte unchanged — this is asserted directly in
+`MorningRecommendationAssemblerTest`.
+
+**Reproducibility is bounded by retention, not unconditional.** The guarantee above holds only while
+the raw sleep/HR/HRV history a replay needs is still on-device. §2.11.2 deliberately re-derives HRV
+and RHR baselines live at wake time (`forceLiveBaselines = true`) rather than reusing the day's frozen,
+day-end-bounded snapshot — necessary for correctness, since a frozen snapshot was computed with a
+different bounding regime. But a live re-derivation reads whatever raw history currently exists in
+Room: once `DataCleanupWorker` prunes samples older than the retention cutoff (§1's Cold tier), a
+replay of a day near or before that cutoff can see a shorter HRV/RHR lookback window than the original
+morning computation did, because some of the nights that originally fed its baseline are no longer
+present (or now only exist as a warm-tier reconstruction, itself a measured approximation — see
+"Determinism across tiers" above). This is the same **idempotent-within-a-tier** doctrine this
+document already applies to warm-tier HR reconstruction, extended to the recommendation path: replay
+reproduces the original decision exactly as long as the underlying raw window is unchanged, and
+degrades to a measured approximation, not a bit-identical replay, once retention has moved that window.
+
+#### 2.11.5 Persistence (`WorkoutRecommendationCodec`, `daily_summaries.workoutRecommendationJson`)
+
+`ScoringRepositoryImpl.computeDailySummary` calls `MorningRecommendationAssembler.assemble` last —
+after the daily TRIMP/RAS pass and `FinalSummaryAssembler.assemble` have produced `finalSummary` —
+and returns `finalSummary.copy(workoutRecommendation = assembler.assemble(context, previous =
+context.dailySummary?.workoutRecommendation) ?: previous)` — the `?: previous` fallback keeps an
+already-stored snapshot when this day's assembly degrades to `null` (§2.11.2), the same "no fresh
+value means keep the stored one" rule `withStepCount` applies to step counts. It never recurses back
+into `computeDailySummary`.
+`context.dailySummary` is the row already loaded for this exact day by
+`ScoringDayContextResolver.resolveScoringDayContext` (`scoringHistoryRepository.getDailySummaryByDate`),
+so `previous` is always the snapshot actually stored for that day, not a stale or cross-day value; it
+feeds `MorningRecommendationAssembler`'s source-session retention rule (§2.11.1) — passing only the
+one-argument `assemble(context)` would silently disable that retention and re-run selection from
+scratch on every call.
+
+`ScoringRepositoryImpl` builds its own `MorningRecommendationAssembler` from a required (non-nullable)
+`MorningRecommendationDependencies` constructor parameter -- its own file,
+`core/database/.../data/repository/MorningRecommendationDependencies.kt`, mirroring the
+`ScoringDataLoaders.kt`/`ScoringDayUseCases.kt` precedent -- holding `SleepSessionRepository`,
+`ComputeSleepMetricsUseCase`, `CurrentNightHrvResolver`, `WorkoutRepository`, `DailySummaryRepository`,
+`GetWorkoutDisplayMetricsUseCase` (grouped for the same `LongParameterList` reason as those two). It
+reuses this repository's own `residualFatigueComputer`/`calibrationGate`/`baselineComputer`/
+`scoringConfigFactory` rather than separate instances -- both collaborators are stateless aside from
+the caller-supplied walk-forward context, so this is equivalent to Hilt providing fresh ones. The
+dependency is required, not optional: an earlier draft defaulted it to `null` for test-call-site
+convenience, but that let a `ScoringRepositoryImpl` built without DI silently produce permanently-null
+recommendations with no log line and no exception, which is a worse failure mode than the mechanical
+cost of updating every construction site (production Hilt injection was never affected either way, so
+no runtime behavior changed).
+
+`WorkoutRecommendationCodec` (`core/database/.../data/mapper/WorkoutRecommendationCodec.kt`) is the
+only place that turns a `WorkoutRecommendationSnapshot` into the column's TEXT value and back, using a
+dedicated `Json { ignoreUnknownKeys = true; encodeDefaults = true }` instance (no shared production
+`Json` existed elsewhere in this module to reuse; `encodeDefaults` keeps `ruleVersion` explicit in the
+stored payload, `ignoreUnknownKeys` lets a future app version's added fields round-trip through an
+older build). Its validation constants are imported, not duplicated: `RULE_VERSION` and
+`EXAMPLE_STATES` are `internal` on `MorningRecommendationAssembler.kt` specifically so the codec reads
+the same values the assembler stamps, and the example-count limit is
+`SelectWorkoutRecommendationExamples.MAX_EXAMPLES` (`core/scoring`, exposed non-`private` for the same
+reason) -- a hand-duplicated copy would let a future rule-version or example-count change in one file
+silently desync from the other, so every snapshot written by the new build decodes as absent with no
+error anywhere. `decode` treats any unrecognized `ruleVersion`, any wake-session/wake-time nullness
+mismatch, more than three examples, examples sharing an `exerciseType` (the producer keeps at most one
+example per type), or examples attached to a non-`EASY`/`HARDER` state as **absent** (`null`) rather
+than coercing it into a decision — a corrupt or future-version row must read back as "not calculated
+yet," never as a guessed `HARDER`. `DailySummaryMapper` calls the codec both ways (`toDomain`/
+`toEntity`), so the recommendation travels through the same single upsert as every other computed
+field — one `dailySummaryDao.upsert(entity)` call commits category, reasons, and examples together;
+there is no separate examples table. A *computation* failure inside assembly (a failed sleep-metrics
+pass) degrades to no snapshot and the day still writes normally — see §2.11.2. An *operational*
+failure that throws (a Room read failing outright, say) still propagates: assembly runs before the
+`persist`/`computeAndPersistDailySummary` call, so the whole day's write is aborted and the prior
+persisted row is left untouched rather than partially overwritten.
+
+`daily_summaries.workoutRecommendationJson` is additive/nullable (schema v19, above); a `null` value
+means "not calculated yet" — including every row from before this column existed — and is presentation-
+distinct from an assembled snapshot whose own `decision.state` is an unavailable value such as
+`CALIBRATING`. That presentation distinction is drawn by the dashboard UI, not by this persistence
+layer.
+
+**Resync cost (accepted, not yet optimized).** `DailyRecomputeSupport.recomputeDay` →
+`computeAndPersistDailySummary` runs recommendation assembly on *every* day of a full historical
+resync, exactly as it does for the daily-sync path -- there is no walk-forward fast path for it. Per
+day this adds: a bounded `getInRange` sleep-history query (~60 days — it was an unbounded `getSince`,
+which made this cost quadratic in retained history rather than per-day constant; see §2.11.3), a full sleep-metrics pass with
+`forceLiveBaselines = true` (bypassing the frozen-baseline short-circuit ordinary scoring uses once a
+day is frozen), a `CalibrationGate` evaluation, a residual-fatigue evaluation, and — for any day whose
+decision lands on EASY/HARDER — a 30-day workout-example load plus its bounded 42-day summary read
+(also formerly an unbounded `getSince`, and the worse of the two: `DailySummaryRepositoryImpl.getSince`
+reads preferences and maps every returned row through `DailySummaryMapper`, JSON decode included, so
+the waste compounded as the backfill populated the very rows it was redundantly re-fetching). Both
+reads are now O(window) rather than O(remaining history), making this cost genuinely per-day constant.
+None of this is shared across days the
+way `WalkForwardTrimpContext`/`WalkForwardBaselineContext`/`WalkForwardFatigueContext`/
+`WalkForwardVo2MaxContext` amortize the rest of the pipeline (PERF-002/WP-20/WP-22/WP-27). This is an
+accepted cost for this task, not an oversight: batching or otherwise amortizing recommendation
+assembly across a walk-forward resync is deferred to whichever future task first has reason to
+optimize it. The backfill/upgrade task that follows this one (§1.2's scoring-version-5 paragraph,
+above) intentionally does not scope this cost down or skip recommendation assembly for any day — the
+version-5 marker asserts a *full* recompute happened, which requires every retained day to actually
+get a recommendation.
 
 ---
 
@@ -1451,12 +1840,14 @@ defaults when unset).
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/model/VitalStatusClassifiers.kt`      | Domain — canonical steps/heart-rate status seams     | `StepsStatusClassifier` and `HeartRateStatusClassifier` classify display statuses         |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/service/HealthMetricsService.kt`     | Domain — canonical BP status seam and facade         | delegates BMI/body-fat assessments; owns blood-pressure assessment and component chart-band metadata derived from the same thresholds |
 | `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/calculation/HealthMetricsCalculator.kt` | Domain — facade (delegates)                     | `assessBmi()`/`assessBodyFatPercent()` → `BodyCompositionAssessment`; `assessBloodPressure()` → `HealthMetricsService` |
-| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/local/HealthDatabase.kt`                                             | Storage — Room DB (v17)                             | 17 entities; pre-bridge Room migration chain ends at v6; external migration owns v7; Room owns v7→v17 |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/local/HealthDatabase.kt`                                             | Storage — Room DB (v19)                             | 18 entities; pre-bridge Room migration chain ends at v6; external migration owns v7; Room owns v7→v19 |
 | `app/src/main/kotlin/app/readylytics/health/data/migration/DatabaseReadinessGate.kt`                                            | Storage — pre-Room readiness guard                  | missing or v7..`DATABASE_VERSION` ready; v5/v6 or resumable metadata require external migration |
 | `app/src/main/kotlin/app/readylytics/health/data/migration/V7DatabaseMigrator.kt`                                               | Storage — resumable external v7 migration           | preflight; 10k keyset copy/checkpoint; per-index transactions; validated atomic cutover  |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/migration/DatabaseMigrationModels.kt`                                 | Domain — migration contracts                        | readiness inspector/state; phase/progress/result models                                  |
 | `app/src/main/kotlin/app/readylytics/health/data/security/SqlCipherKeyManager.kt`                                               | Storage — scoped encrypted DB access                | opens raw SQLCipher DB only inside a callback and zeroes plaintext key bytes              |
-| `core/database-schema/src/main/kotlin/app/readylytics/health/core/databaseschema/data/local/entity/DailySummaryEntity.kt`             | Storage — computed-day snapshot                     | scores + frozen baselines                                                                |
+| `core/database-schema/src/main/kotlin/app/readylytics/health/core/databaseschema/data/local/entity/DailySummaryEntity.kt`             | Storage — computed-day snapshot                     | scores + frozen baselines + `workoutRecommendationJson` (opaque, §2.11.5)                |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/mapper/WorkoutRecommendationCodec.kt`                        | Storage — recommendation snapshot codec             | `encode`/`decode` `WorkoutRecommendationSnapshot` ↔ TEXT; rejects unknown version/invariants as null (§2.11.5) |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/local/migration/Migration18To19.kt`                          | Storage — schema v18→v19 migration                  | additive nullable `daily_summaries.workoutRecommendationJson` column                     |
 | `core/database-schema/src/main/kotlin/app/readylytics/health/core/databaseschema/data/local/entity/InsightDismissalEntity.kt`         | Storage — insight dismissal                         | dateMidnightMs + type                                                                    |
 | `core/database/src/main/kotlin/app/readylytics/health/core/database/data/local/entity/AuditEventEntity.kt`                       | Storage — local audit events                        | metadata-only backup/restore/key-lifecycle events                                        |
 | `core/database-schema/src/main/kotlin/app/readylytics/health/core/databaseschema/data/local/entity/WorkoutRoutePointEntity.kt`        | Storage — workout route points                      | normalized coordinates per workout; cascade-deleted with workout                          |
@@ -1494,9 +1885,22 @@ defaults when unset).
 | `core/database/src/main/kotlin/app/readylytics/health/core/database/domain/scoring/TrainingReadinessProjectionRecomputeUseCase.kt` | Processing — parameter-only projection | one retained-summary read + one transactional batch write; no Health Connect/raw/TRIMP/fatigue work (§2.8) |
 | `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/scoring/GenerateResidualFatigueCurveUseCase.kt` | Processing — residual fatigue curve (pure) | generates multi-day timeline samples at zoned 15m steps + workout impulses, truncated at `nowMs` (§2.8) |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/scoring/ResidualFatigueConfig.kt` | Domain — fatigue parameters | always-on halfLifeHours / fatigueGain (§2.8) |
+| `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/scoring/ResidualFatigueThresholds.kt` | Domain — shared fatigue classification (pure) | gain-scaled 30/70 `classify(value, gain)`; null/non-finite/negative value or invalid gain → NO_DATA; shared by the Dashboard card and `ComputeWorkoutRecommendationUseCase` (§2.8, §2.11) |
+| `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/recommendation/WorkoutRecommendation.kt` | Domain — recommendation model | `WorkoutRecommendationState`/`WorkoutRecommendationReason`/`WorkoutRecommendationDecision` (§2.11) |
+| `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/recommendation/WorkoutRecommendationInput.kt` | Processing — recommendation input | fully-resolved parameter object, no reads/clock (§2.11) |
+| `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/recommendation/ComputeWorkoutRecommendationUseCase.kt` | Processing — workout recommendation (pure) | availability gate + ordered reason collection → Rest/Easy/Harder decision (§2.11) |
+| `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/recommendation/WorkoutRecommendationExample.kt` | Domain — recommendation example | one past workout offered as an example; carries the canonical `finalLoad` (§2.11.3) |
+| `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/recommendation/WorkoutRecommendationSnapshot.kt` | Domain — recommendation snapshot | `ruleVersion` + wake anchor + decision + examples for one local day (§2.11.1) |
+| `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/recommendation/SelectWorkoutRecommendationExamples.kt` | Processing — example selection (pure) | allowed-load filter, end-time-desc sort with stable id tiebreak, dedup by exercise type, cap 3 (§2.11.3) |
+| `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/recommendation/SelectMorningSleepSession.kt` | Processing — wake anchor (pure) | circular clock distance to the habitual wake time; ties by earliest end then stable id (§2.11.1) |
+| `core/scoring/src/main/kotlin/app/readylytics/health/core/scoring/domain/scoring/CircadianWakeBaseline.kt` | Processing — habitual bed/wake times (pure) | shared ≥180-min / ≥3-session baseline selection + median, used by the circadian score and the morning anchor (§2.11.1) |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/recommendation/MorningRecommendationAssembler.kt` | Processing — morning snapshot | anchor selection → bounded recovery inputs → evaluator → example selection (§2.11.1) |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/recommendation/MorningRecoveryLoader.kt` | Processing — bounded recovery inputs | re-runs `ComputeSleepMetricsUseCase` bounded at the wake time (`forceLiveBaselines`, wake-bounded RHR baseline, `CalibrationGate` at wake); frozen-profile HRV bounds; `computeAt` fatigue (§2.11.2) |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/CalibrationGate.kt` | Processing — calibration gate | frozen ⇒ calibrated, else live valid-night count; optional `toMs` for the morning anchor (§2.4, §2.11.2) |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/recommendation/WorkoutExampleLoader.kt` | Processing — example candidates | 30-day pre-wake window, pre-narrowed rows, one summary prefetch, fresh display metrics per load (§2.11.3) |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/repository/WalkForwardFatigueContext.kt` | Processing — walk-forward accumulator | prefetched impulse series + running accumulated fatigue (WP-27) |
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/repository/WalkForwardVo2MaxContext.kt` | Processing — walk-forward VO2 Max lookup | prefetched wearable VO2 Max readings (`TreeMap<Long, Float>`), `floorEntry`-based per-day lookup (§2.6) |
-| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/ResidualFatigueComputer.kt` | Processing — fatigue snapshot | per-day snapshot at next-day midnight (`compute`); live non-persisting decay through `nowMs` (`computeLive`); exact retained-history seed (§2.8) |
+| `core/database/src/main/kotlin/app/readylytics/health/core/database/data/repository/ResidualFatigueComputer.kt` | Processing — fatigue snapshot | per-day snapshot at next-day midnight (`compute`); non-persisting decay through any instant (`computeAt`, aliased by `computeLive`); exact retained-history seed (§2.8, §2.11.2) |
 | `feature/dashboard/src/main/kotlin/app/readylytics/health/feature/dashboard/usecase/GetCurrentResidualFatigueUseCase.kt` | Domain — today-only gate | live residual fatigue gate for today (`clock.withZone(scoringZoneId)`); `NotApplicable` for past/future days, `Unavailable` when gated (§2.8) |
 | `feature/dashboard/src/main/kotlin/app/readylytics/health/feature/dashboard/usecase/LiveResidualFatigue.kt` | Domain — tri-state | separates "use the snapshot" from "unknown", so a gated today cannot render the understated snapshot (§2.8) |
 | `feature/dashboard/src/main/kotlin/app/readylytics/health/feature/dashboard/DashboardFatigueTicker.kt` | UI — refresh cadence | minute-bucket flow driving live fatigue re-decay while the dashboard is subscribed (§2.8) |

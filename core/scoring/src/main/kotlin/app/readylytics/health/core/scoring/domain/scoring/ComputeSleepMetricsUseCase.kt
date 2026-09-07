@@ -71,7 +71,8 @@ class ComputeSleepMetricsUseCase
                         "threshold=${scoringConfig.circadianConsistency.thresholdMinutes}"
                 }
 
-                val frozenBaseline = summary.baselineCalculatedAtDate != null
+                val frozenBaseline =
+                    !request.forceLiveBaselines && summary.baselineCalculatedAtDate != null
                 val sleepDayPolicy =
                     SleepDayPolicy(
                         coreMergeGapMinutes = prefs.coreMergeGapMinutes,
@@ -83,13 +84,9 @@ class ComputeSleepMetricsUseCase
 
                 val baselineWindow =
                     resolveBaselineWindow(
+                        request = request,
                         frozenBaseline = frozenBaseline,
-                        summary = summary,
-                        dayMidnight = dayMidnight,
-                        dayEndMs = dayEndMs,
                         sleepDayPolicy = sleepDayPolicy,
-                        currentSessionIds = currentSessionIds,
-                        prefs = prefs,
                     )
 
                 val rhrValues = baselineWindow.rhrValues
@@ -533,14 +530,11 @@ class ComputeSleepMetricsUseCase
         }
 
         private suspend fun resolveBaselineWindow(
+            request: SleepMetricsRequest,
             frozenBaseline: Boolean,
-            summary: DailySummary,
-            dayMidnight: Instant,
-            dayEndMs: Long,
             sleepDayPolicy: SleepDayPolicy,
-            currentSessionIds: Set<String>,
-            prefs: UserPreferences,
         ): BaselineWindowResult {
+            val summary = request.summary
             return if (frozenBaseline) {
                 BaselineWindowResult(
                     rhrValues = emptyList(),
@@ -557,19 +551,20 @@ class ComputeSleepMetricsUseCase
             } else {
                 val rhrValues =
                     collaborators.baselineComputer.rhrHistoryBetween(
-                        fromMs = dayMidnight.toEpochMilli(),
-                        toMs = dayEndMs,
-                        percentile = prefs.restingHrPercentile,
+                        fromMs = request.dayMidnight.toEpochMilli(),
+                        toMs = request.dayEndMs,
+                        percentile = request.prefs.restingHrPercentile,
                         zoneId = sleepDayPolicy.scoringZoneId,
                         sleepDayPolicy = sleepDayPolicy,
                     )
                 val hrvWindows =
                     collaborators.baselineComputer.computeHrvWindowsBetween(
-                        fromMs = dayMidnight.toEpochMilli(),
-                        toMs = dayEndMs,
+                        fromMs = request.dayMidnight.toEpochMilli(),
+                        toMs = request.dayEndMs,
                         zoneId = sleepDayPolicy.scoringZoneId,
-                        excludeSessionIds = currentSessionIds,
+                        excludeSessionIds = request.currentSessionIds,
                         sleepDayPolicy = sleepDayPolicy,
+                        ignoreFrozenSnapshot = request.forceLiveBaselines,
                     ) ?: BaselineComputer.HrvWindows(
                         muHistory = emptyList(),
                         sigmaHistory = emptyList(),

@@ -92,4 +92,52 @@
     <string name="restore_partial_success_title" ns0:ignore="UnusedResources">Restore partly completed</string>
     <string name="restore_stage_preferences" ns0:ignore="UnusedResources">settings</string>
     <string name="log_share_chooser_title">Download/Share logs</string>
+
+    <!-- Workout recommendation dashboard card. This title is app-owned (not in
+         feature/dashboard's strings.xml) and passed to card management as a title override -
+         see CardManagementBottomSheet's titleOverrides parameter. -->
+    <string name="card_title_workout_recommendation">Workout Recommendation</string>
+    <string name="workout_recommendation_category_rest">Rest</string>
+    <string name="workout_recommendation_category_easy">Easy workout</string>
+    <string name="workout_recommendation_category_harder">Push harder</string>
+    <string name="workout_recommendation_category_not_calculated">Recommendation not calculated yet</string>
+    <string name="workout_recommendation_category_calibrating">Calibrating</string>
+    <string name="workout_recommendation_category_no_sleep">Sleep data missing</string>
+    <string name="workout_recommendation_category_no_hrv">HRV data missing</string>
+    <string name="workout_recommendation_category_no_circadian_baseline">Building your circadian baseline</string>
+    <string name="workout_recommendation_category_no_hrv_baseline">Building your HRV baseline</string>
+
+    <string name="workout_recommendation_explanation_not_calculated">This day\'s guidance has not
+        been calculated yet.</string>
+    <string name="workout_recommendation_explanation_calibrating">Keep logging sleep and heart-rate
+        data for a few more days so we can learn your usual range.</string>
+    <string name="workout_recommendation_explanation_no_sleep">We need last night\'s sleep data to
+        give you guidance today.</string>
+    <string name="workout_recommendation_explanation_no_hrv">We need this morning\'s HRV reading to
+        give you guidance today.</string>
+    <string name="workout_recommendation_explanation_no_circadian_baseline">We\'re still learning
+        your usual sleep and wake times.</string>
+    <string name="workout_recommendation_explanation_no_hrv_baseline">We\'re still learning your
+        usual HRV range.</string>
+
+    <string name="workout_recommendation_reason_possible_illness">Your signals look consistent with
+        possible illness.</string>
+    <string name="workout_recommendation_reason_hrv_low">Your HRV is lower than usual.</string>
+    <string name="workout_recommendation_reason_hrv_high">Your HRV is higher than usual.</string>
+    <string name="workout_recommendation_reason_sleep_low">Your sleep score is lower than usual.</string>
+    <string name="workout_recommendation_reason_fatigue_high">Your training fatigue is elevated.</string>
+    <string name="workout_recommendation_reason_sleep_score_missing">Today\'s sleep score is
+        unavailable.</string>
+    <string name="workout_recommendation_reason_fatigue_missing">Today\'s fatigue level is
+        unavailable.</string>
+    <string name="workout_recommendation_reason_within_usual_range">Your HRV, sleep, and fatigue
+        are all within their usual range.</string>
+
+    <string name="workout_recommendation_info_body">This guidance compares this morning\'s HRV,
+        last night\'s sleep, and your recent training fatigue against your own usual range, then
+        shows past workouts that matched a similar effort level.</string>
+
+    <string name="workout_recommendation_duration_format">%1$d min</string>
+    <string name="workout_recommendation_duration_with_hr_format">%1$d min • %2$d bpm avg</string>
+    <string name="workout_recommendation_open_workout_cd">Open recorded %1$s workout</string>
 </resources>

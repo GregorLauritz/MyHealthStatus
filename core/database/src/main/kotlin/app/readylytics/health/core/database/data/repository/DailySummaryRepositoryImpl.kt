@@ -48,6 +48,15 @@ class DailySummaryRepositoryImpl
             return dao.getSince(fromMs).map { DailySummaryMapper.toDomain(it, prefs.scoringZone()) }
         }
 
+        override suspend fun getInRange(
+            fromMs: Long,
+            toMs: Long,
+        ): List<DailySummary> {
+            if (toMs < fromMs) return emptyList()
+            val prefs = settingsRepository.userPreferences.first()
+            return dao.getBetween(fromMs, toMs).map { DailySummaryMapper.toDomain(it, prefs.scoringZone()) }
+        }
+
         override fun observeFirstSessionEndingInRange(
             fromMs: Long,
             toMs: Long,
