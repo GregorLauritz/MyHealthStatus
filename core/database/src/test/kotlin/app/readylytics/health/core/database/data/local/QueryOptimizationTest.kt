@@ -336,4 +336,42 @@ class QueryOptimizationTest {
             assert(result[0].beatsPerMinute == 55) { "expected first sample (earliest timestamp) to be 55 bpm" }
             assert(result[1].beatsPerMinute == 58) { "expected second sample to be 58 bpm" }
         }
+
+    @Test
+    fun hrvDao_observeSleepHrvTimelineForSession_returnsOnlyThatSessionsSleepSamplesInOrder() =
+        runTest {
+            val baselineMs = Instant.now().minus(1, ChronoUnit.DAYS).toEpochMilli()
+            val sleepRecords =
+                listOf(
+                    HrvRecordEntity(
+                        sourceRecordRef = 2L,
+                        sessionId = "sleep_session",
+                        recordType = "SLEEP",
+                        timestampMs = baselineMs + 120_000L,
+                        rmssdMs = 42f,
+                    ),
+                    HrvRecordEntity(
+                        sourceRecordRef = 1L,
+                        sessionId = "sleep_session",
+                        recordType = "SLEEP",
+                        timestampMs = baselineMs,
+                        rmssdMs = 38f,
+                    ),
+                )
+            val otherSessionRecord =
+                HrvRecordEntity(
+                    sourceRecordRef = 3L,
+                    sessionId = "workout_session",
+                    recordType = "EXERCISE",
+                    timestampMs = baselineMs + 60_000L,
+                    rmssdMs = 20f,
+                )
+            hrvDao.upsertAll(sleepRecords + otherSessionRecord)
+
+            val result = hrvDao.observeSleepHrvTimelineForSession("sleep_session").first()
+
+            assert(result.size == 2) { "expected 2 sleep samples, got ${result.size}" }
+            assert(result[0].rmssdMs == 38f) { "expected first sample (earliest timestamp) to be 38ms" }
+            assert(result[1].rmssdMs == 42f) { "expected second sample to be 42ms" }
+        }
 }

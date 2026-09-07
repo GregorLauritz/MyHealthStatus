@@ -216,6 +216,7 @@ object SettingsDefaults {
             SleepTopCardConfiguration(SleepTopCardId.SLEEP_BREAKDOWN_BAR, isVisible = true, position = 2),
             SleepTopCardConfiguration(SleepTopCardId.SLEEP_STAGES_TIMELINE, isVisible = true, position = 3),
             SleepTopCardConfiguration(SleepTopCardId.SLEEP_HR_CHART, isVisible = true, position = 4),
+            SleepTopCardConfiguration(SleepTopCardId.SLEEP_HRV_CHART, isVisible = true, position = 5),
         )
 
     val DEFAULT_SLEEP_CHARTS =

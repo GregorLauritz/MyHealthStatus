@@ -90,6 +90,19 @@ interface HrvDao {
     suspend fun getSleepRmssdForSession(sessionId: String): List<Float>
 
     @Query(
+        "SELECT * FROM hrv_records " +
+            "WHERE recordType = 'SLEEP' AND sessionId = :sessionId " +
+            "ORDER BY timestampMs ASC, sourceRecordRef ASC",
+    )
+    fun _observeSleepHrvTimelineForSession(sessionId: String): Flow<List<HrvRecordEntity>>
+
+    // OD-3 exception (mirrors HeartRateDao.observeSleepHrTimelineForSession): deliberately
+    // unfiltered -- backs the raw overnight HRV chart, which shows sensor data as-is rather than
+    // hiding implausible spikes.
+    fun observeSleepHrvTimelineForSession(sessionId: String): Flow<List<HrvRecordEntity>> =
+        _observeSleepHrvTimelineForSession(sessionId).distinctUntilChanged()
+
+    @Query(
         "SELECT sessionId, rmssdMs FROM hrv_records WHERE recordType = 'SLEEP' AND sessionId IN (:sessionIds) " +
             "AND rmssdMs BETWEEN 1.0 AND 200.0 " +
             "ORDER BY sessionId ASC, timestampMs ASC, sourceRecordRef ASC",

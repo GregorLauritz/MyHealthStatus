@@ -50,6 +50,7 @@ class SleepLayoutRenderersTest {
                 SleepTopCardId.SLEEP_BREAKDOWN_BAR,
                 SleepTopCardId.SLEEP_STAGES_TIMELINE,
                 SleepTopCardId.SLEEP_HR_CHART,
+                SleepTopCardId.SLEEP_HRV_CHART,
             ),
             SLEEP_TOP_CARD_FULL_WIDTH_IDS,
         )

@@ -472,7 +472,10 @@ skipped by the restore reader's `else -> skipValue()` branch.
   hot-path sleep-RHR reads apply the same predicate (`HeartRateDao.getSleepHrSamplesForSession`,
   `getSleepHrProjectionForSessions`, `getAvgSleepHrForSessions`) so the sleep percentile RHR and avg RHR
   are bit-consistent whether read from raw or reconstructed warm samples. `observeSleepHrTimelineForSession`
-  (UI chart) intentionally stays unfiltered.
+  (UI chart) intentionally stays unfiltered. `observeSleepHrvTimelineForSession`
+  (UI chart, HRV overnight timeline) is likewise unfiltered — it feeds the sleep-tab HRV chart
+  via `HeartRateRepository.observeSleepHrvTimelineForSession(sessionId)` → `SleepViewModel` and is never
+  used by the scoring pipeline.
 - **Cold tier:** the permanent `daily_summaries` (computed cache). `RetentionCleanup` prunes raw
   HR/HRV and warm buckets older than the stored-scoring-zone boundary from
   `RetentionBounds.resolveRetentionCutoffMs(prefs)`; retention

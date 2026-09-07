@@ -36,12 +36,13 @@ import app.readylytics.health.core.ui.components.metriccard.toUniversalMode
 import app.readylytics.health.feature.sleep.R
 import app.readylytics.health.core.ui.R as CoreUiR
 
-/** Full-width top cards (architecture bar, stages timeline, HR chart). The two gauges pair up. */
+/** Full-width top cards (architecture bar, stages timeline, HR/HRV charts). The two gauges pair up. */
 val SLEEP_TOP_CARD_FULL_WIDTH_IDS: Set<SleepTopCardId> =
     setOf(
         SleepTopCardId.SLEEP_BREAKDOWN_BAR,
         SleepTopCardId.SLEEP_STAGES_TIMELINE,
         SleepTopCardId.SLEEP_HR_CHART,
+        SleepTopCardId.SLEEP_HRV_CHART,
     )
 
 private val VALUE_ONLY_MODES = listOf(UniversalCardDisplayMode.VALUE)
@@ -160,6 +161,21 @@ fun buildSleepTopCardDataMap(
                             // R2-UI-002: sleep-detail ViewModel isn't yet wired to the tier-aware
                             // observeTimelineWithResolution pattern -- out of this task's scope.
                             resolution = HeartRateResolution.RAW,
+                        )
+                    }
+                }
+            },
+        SleepTopCardId.SLEEP_HRV_CHART to
+            @Composable { _: SleepTopCardConfiguration ->
+                if (uiState.isLoading) {
+                    SkeletonCard(height = 260.dp)
+                } else {
+                    TrendCard(title = stringResource(R.string.sleep_hrv_chart_title)) {
+                        SleepHrvChart(
+                            session = singleSessionVisual,
+                            samples = uiState.sleepHrvSamples,
+                            avgHrv = uiState.latestSummary?.nocturnalHrv?.toFloat(),
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
                 }

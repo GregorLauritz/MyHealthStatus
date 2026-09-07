@@ -43,6 +43,8 @@ interface HeartRateRepository {
 
     fun observeSleepHrvSince(fromMs: Long): Flow<List<HrvRecordData>>
 
+    fun observeSleepHrvTimelineForSession(sessionId: String): Flow<List<HrvRecordData>>
+
     fun observeByTimeRange(
         startMs: Long,
         endMs: Long,

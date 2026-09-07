@@ -14,6 +14,7 @@ val SleepTopCardId.displayNameResId: Int
             SleepTopCardId.SLEEP_BREAKDOWN_BAR -> R.string.sleep_breakdown_title
             SleepTopCardId.SLEEP_STAGES_TIMELINE -> R.string.sleep_timeline_title
             SleepTopCardId.SLEEP_HR_CHART -> R.string.sleep_hr_chart_title
+            SleepTopCardId.SLEEP_HRV_CHART -> R.string.sleep_hrv_chart_title
         }
 
 @StringRes
