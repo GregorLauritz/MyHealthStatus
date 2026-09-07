@@ -9,4 +9,5 @@ enum class SleepTopCardId {
     SLEEP_BREAKDOWN_BAR,
     SLEEP_STAGES_TIMELINE,
     SLEEP_HR_CHART,
+    SLEEP_HRV_CHART,
 }

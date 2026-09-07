@@ -8,6 +8,7 @@ import app.readylytics.health.core.model.domain.model.DailyMetrics
 import app.readylytics.health.core.model.domain.model.DailySummary
 import app.readylytics.health.core.model.domain.preferences.UserPreferencesReader
 import app.readylytics.health.core.model.domain.repository.HeartRateRecordData
+import app.readylytics.health.core.model.domain.repository.HrvRecordData
 import app.readylytics.health.core.model.domain.repository.SleepSessionData
 import app.readylytics.health.core.model.domain.repository.SleepStageData
 import app.readylytics.health.core.model.domain.sleep.SleepChartConfiguration
@@ -154,6 +155,15 @@ class SleepViewModel
                             }
                         }
 
+                    val hrvSamplesFlow =
+                        sessionFlow.flatMapLatest { session ->
+                            if (session == null) {
+                                flowOf(emptyList())
+                            } else {
+                                repositories.heartRate.observeSleepHrvTimelineForSession(session.id)
+                            }
+                        }
+
                     val metricsFlow = repositories.dailyMetrics.observeByDate(date)
 
                     val trendSessionsFlow =
@@ -174,6 +184,7 @@ class SleepViewModel
                         trendSessionsFlow,
                         yesterdaySummaryFlow,
                         hrSamplesFlow,
+                        hrvSamplesFlow,
                     ) { array ->
                         val latestSummary = array[0] as DailySummary?
                         val latestSession = array[1] as SleepSessionData?
@@ -188,6 +199,9 @@ class SleepViewModel
 
                         @Suppress("UNCHECKED_CAST")
                         val hrSamples = array[6] as List<HeartRateRecordData>
+
+                        @Suppress("UNCHECKED_CAST")
+                        val hrvSamples = array[7] as List<HrvRecordData>
 
                         SleepUiState(
                             latestSummary = latestSummary,
@@ -214,6 +228,7 @@ class SleepViewModel
                                 ),
                             yesterdaySleepScoreRounded = yesterdaySummary?.sleepScore?.roundToInt(),
                             sleepHrSamples = hrSamples,
+                            sleepHrvSamples = hrvSamples,
                         )
                     }.distinctUntilChanged()
                 }.flowOn(dispatchers.default)

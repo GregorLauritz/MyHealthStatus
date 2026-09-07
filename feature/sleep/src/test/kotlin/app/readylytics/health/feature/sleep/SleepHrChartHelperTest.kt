@@ -51,4 +51,34 @@ class SleepHrChartHelperTest {
 
         assertEquals(0, segments.size)
     }
+
+    @Test
+    fun `trend line averages every sample within the window`() {
+        val samples = listOf(sample(0L, 60), sample(60_000L, 50), sample(120_000L, 40))
+
+        // 120s window covers all three samples at every point
+        val trend = SleepHrChartHelper.computeTrendLine(samples, windowMs = 240_000L)
+
+        assertEquals(3, trend.size)
+        assertEquals(50f, trend[0].avgBpm)
+        assertEquals(50f, trend[1].avgBpm)
+        assertEquals(50f, trend[2].avgBpm)
+    }
+
+    @Test
+    fun `trend line only averages samples inside the half-window`() {
+        val samples = listOf(sample(0L, 60), sample(60_000L, 50), sample(600_000L, 40))
+
+        // 60s half-window: point 0 only sees itself and the 60s neighbor, point 2 (600s) is isolated
+        val trend = SleepHrChartHelper.computeTrendLine(samples, windowMs = 120_000L)
+
+        assertEquals(55f, trend[0].avgBpm)
+        assertEquals(55f, trend[1].avgBpm)
+        assertEquals(40f, trend[2].avgBpm)
+    }
+
+    @Test
+    fun `trend line of empty input is empty`() {
+        assertEquals(emptyList<SleepHrTrendPoint>(), SleepHrChartHelper.computeTrendLine(emptyList(), windowMs = 1L))
+    }
 }

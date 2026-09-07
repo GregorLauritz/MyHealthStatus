@@ -100,6 +100,7 @@ class SleepViewModelTest {
         }
         every { sleepSessionRepository.observeSince(any()) } returns flowOf(emptyList())
         every { sleepSessionRepository.observeFirstSessionEndingInRange(any(), any()) } returns flowOf(null)
+        every { heartRateRepository.observeSleepHrvTimelineForSession(any()) } returns flowOf(emptyList())
         every { sleepLayoutRepository.sleepTopCardConfigurations() } returns
             flowOf(app.readylytics.health.core.model.data.preferences.SettingsDefaults.DEFAULT_SLEEP_TOP_CARDS)
         every { sleepLayoutRepository.sleepChartConfigurations() } returns

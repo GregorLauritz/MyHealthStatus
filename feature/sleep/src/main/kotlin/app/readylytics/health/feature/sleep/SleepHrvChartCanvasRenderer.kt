@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -12,77 +13,49 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.unit.dp
-import app.readylytics.health.core.model.domain.repository.HeartRateRecordData
+import app.readylytics.health.core.model.domain.repository.HrvRecordData
 import java.time.Instant
 
-// See the file-header comment in SleepHrChart.kt: the Canvas draw passes extracted out of
-// SleepHrChart so it clears detekt's LongMethod/CyclomaticComplexMethod/TooManyFunctions
-// thresholds without changing any behavior -- these are line-for-line ports of the original
-// DrawScope block, only regrouped by draw pass (grid/axes, HR line, selection highlight).
+// Canvas draw passes for the nightly HRV chart, structured like SleepHrChartCanvasRenderer.kt
+// (grid/axes, HRV line, avg-HRV reference line, selection highlight).
 
-internal fun DrawScope.renderSleepHrCanvas(
-    data: SleepHrDerivedData,
-    style: SleepHrChartStyle,
-    selectedSample: HeartRateRecordData?,
+internal fun DrawScope.renderSleepHrvCanvas(
+    data: SleepHrvDerivedData,
+    style: SleepHrvChartStyle,
+    selectedSample: HrvRecordData?,
     pulse: SleepHrPulseAnimation,
     leftLabelWidthPx: Float,
+    avgHrv: Float?,
     zoomedX: (Long) -> Float,
 ) {
     val plotTop = 0f
-    val bottomLabelHeight = SLEEP_HR_BOTTOM_LABEL_HEIGHT.toPx()
+    val bottomLabelHeight = SLEEP_HRV_BOTTOM_LABEL_HEIGHT.toPx()
     val plotRect = Rect(leftLabelWidthPx, plotTop, size.width, size.height - bottomLabelHeight)
     val plotH = plotRect.bottom - plotRect.top
 
-    fun bpmToY(bpm: Int): Float =
-        plotRect.top + (1f - (bpm - data.yMin).toFloat() / (data.yMax - data.yMin).toFloat()) * plotH
+    fun msToY(ms: Float): Float = plotRect.top + (1f - (ms - data.yMin) / (data.yMax - data.yMin).toFloat()) * plotH
 
-    fun trendToY(bpm: Float): Float =
-        plotRect.top + (1f - (bpm - data.yMin) / (data.yMax - data.yMin).toFloat()) * plotH
-
-    drawSleepHrGridAndAxes(plotRect, style, data.yLabels, data.labelTimestamps, ::bpmToY, zoomedX)
-    drawSleepHrLine(plotRect, data.segments, style.lineColor, ::bpmToY, zoomedX)
-    drawSleepHrTrendLine(plotRect, data.trendSegments, style.trendColor, ::trendToY, zoomedX)
-    drawSleepHrSelection(plotRect, selectedSample, style.lineColor, pulse, ::bpmToY, zoomedX)
-}
-
-private fun DrawScope.drawSleepHrTrendLine(
-    plotRect: Rect,
-    trendSegments: List<List<SleepHrTrendPoint>>,
-    trendColor: Color,
-    trendToY: (Float) -> Float,
-    zoomedX: (Long) -> Float,
-) {
-    clipRect(left = plotRect.left, top = plotRect.top, right = plotRect.right, bottom = plotRect.bottom) {
-        for (segment in trendSegments) {
-            if (segment.size < 2) continue
-            val path = Path()
-            segment.forEachIndexed { i, point ->
-                val x = zoomedX(point.timestampMs)
-                val y = trendToY(point.avgBpm)
-                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-            }
-            drawPath(
-                path = path,
-                color = trendColor,
-                style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
-            )
-        }
+    drawSleepHrvGridAndAxes(plotRect, style, data.yLabels, data.labelTimestamps, ::msToY, zoomedX)
+    drawSleepHrvLine(plotRect, data.segments, style.lineColor, ::msToY, zoomedX)
+    if (avgHrv != null) {
+        drawSleepHrvAvgLine(plotRect, avgHrv, style.avgColor, ::msToY)
     }
+    drawSleepHrvSelection(plotRect, selectedSample, style.lineColor, pulse, ::msToY, zoomedX)
 }
 
-private fun DrawScope.drawSleepHrGridAndAxes(
+private fun DrawScope.drawSleepHrvGridAndAxes(
     plotRect: Rect,
-    style: SleepHrChartStyle,
+    style: SleepHrvChartStyle,
     yLabels: List<Int>,
     labelTimestamps: List<Long>,
-    bpmToY: (Int) -> Float,
+    msToY: (Float) -> Float,
     zoomedX: (Long) -> Float,
 ) {
     val gridLineColor = style.axisLineColor.copy(alpha = 0.4f)
     val strokePx = 1.dp.toPx()
 
-    for (bpm in yLabels) {
-        val y = bpmToY(bpm)
+    for (ms in yLabels) {
+        val y = msToY(ms.toFloat())
         if (y < plotRect.bottom && y > plotRect.top) {
             drawLine(gridLineColor, Offset(plotRect.left, y), Offset(plotRect.right, y), strokePx)
         }
@@ -102,20 +75,20 @@ private fun DrawScope.drawSleepHrGridAndAxes(
         1.dp.toPx(),
     )
 
-    drawSleepHrYAxisLabels(plotRect, style, yLabels, bpmToY)
-    drawSleepHrXAxisLabels(plotRect, style, labelTimestamps, zoomedX)
+    drawSleepHrvYAxisLabels(plotRect, style, yLabels, msToY)
+    drawSleepHrvXAxisLabels(plotRect, style, labelTimestamps, zoomedX)
 }
 
-private fun DrawScope.drawSleepHrYAxisLabels(
+private fun DrawScope.drawSleepHrvYAxisLabels(
     plotRect: Rect,
-    style: SleepHrChartStyle,
+    style: SleepHrvChartStyle,
     yLabels: List<Int>,
-    bpmToY: (Int) -> Float,
+    msToY: (Float) -> Float,
 ) {
-    for (bpm in yLabels) {
-        val y = bpmToY(bpm)
+    for (ms in yLabels) {
+        val y = msToY(ms.toFloat())
         if (y < plotRect.bottom - 4.dp.toPx() && y > plotRect.top + 4.dp.toPx()) {
-            val measured = style.textMeasurer.measure(bpm.toString(), style.labelStyle)
+            val measured = style.textMeasurer.measure(ms.toString(), style.labelStyle)
             drawText(
                 textLayoutResult = measured,
                 topLeft = Offset(plotRect.left - measured.size.width - 4.dp.toPx(), y - measured.size.height / 2f),
@@ -123,23 +96,23 @@ private fun DrawScope.drawSleepHrYAxisLabels(
         }
     }
 
-    val bpmUnitMeasured = style.textMeasurer.measure(style.bpmUnitLabel, style.axisTitleStyle)
-    val bpmUnitPivot = Offset(x = 10.dp.toPx(), y = (plotRect.top + plotRect.bottom) / 2f)
-    rotate(degrees = -90f, pivot = bpmUnitPivot) {
+    val msUnitMeasured = style.textMeasurer.measure(style.msUnitLabel, style.axisTitleStyle)
+    val msUnitPivot = Offset(x = 10.dp.toPx(), y = (plotRect.top + plotRect.bottom) / 2f)
+    rotate(degrees = -90f, pivot = msUnitPivot) {
         drawText(
-            textLayoutResult = bpmUnitMeasured,
+            textLayoutResult = msUnitMeasured,
             topLeft =
                 Offset(
-                    bpmUnitPivot.x - bpmUnitMeasured.size.width / 2f,
-                    bpmUnitPivot.y - bpmUnitMeasured.size.height / 2f,
+                    msUnitPivot.x - msUnitMeasured.size.width / 2f,
+                    msUnitPivot.y - msUnitMeasured.size.height / 2f,
                 ),
         )
     }
 }
 
-private fun DrawScope.drawSleepHrXAxisLabels(
+private fun DrawScope.drawSleepHrvXAxisLabels(
     plotRect: Rect,
-    style: SleepHrChartStyle,
+    style: SleepHrvChartStyle,
     labelTimestamps: List<Long>,
     zoomedX: (Long) -> Float,
 ) {
@@ -160,11 +133,11 @@ private fun DrawScope.drawSleepHrXAxisLabels(
     }
 }
 
-private fun DrawScope.drawSleepHrLine(
+private fun DrawScope.drawSleepHrvLine(
     plotRect: Rect,
-    segments: List<List<HeartRateRecordData>>,
+    segments: List<List<HrvRecordData>>,
     lineColor: Color,
-    bpmToY: (Int) -> Float,
+    msToY: (Float) -> Float,
     zoomedX: (Long) -> Float,
 ) {
     clipRect(left = plotRect.left, top = plotRect.top, right = plotRect.right, bottom = plotRect.bottom) {
@@ -174,13 +147,13 @@ private fun DrawScope.drawSleepHrLine(
                 drawCircle(
                     color = lineColor,
                     radius = 3.dp.toPx(),
-                    center = Offset(x, bpmToY(segment[0].beatsPerMinute)),
+                    center = Offset(x, msToY(segment[0].rmssdMs)),
                 )
             } else {
                 val path = Path()
                 segment.forEachIndexed { i, sample ->
                     val x = zoomedX(sample.timestampMs)
-                    val y = bpmToY(sample.beatsPerMinute)
+                    val y = msToY(sample.rmssdMs)
                     if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
                 }
                 drawPath(
@@ -193,17 +166,35 @@ private fun DrawScope.drawSleepHrLine(
     }
 }
 
-private fun DrawScope.drawSleepHrSelection(
+private fun DrawScope.drawSleepHrvAvgLine(
     plotRect: Rect,
-    selectedSample: HeartRateRecordData?,
+    avgHrv: Float,
+    avgColor: Color,
+    msToY: (Float) -> Float,
+) {
+    val y = msToY(avgHrv)
+    if (y !in plotRect.top..plotRect.bottom) return
+
+    drawLine(
+        color = avgColor.copy(alpha = 0.7f),
+        start = Offset(plotRect.left, y),
+        end = Offset(plotRect.right, y),
+        strokeWidth = 1.5.dp.toPx(),
+        pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 4.dp.toPx())),
+    )
+}
+
+private fun DrawScope.drawSleepHrvSelection(
+    plotRect: Rect,
+    selectedSample: HrvRecordData?,
     lineColor: Color,
     pulse: SleepHrPulseAnimation,
-    bpmToY: (Int) -> Float,
+    msToY: (Float) -> Float,
     zoomedX: (Long) -> Float,
 ) {
     val selected = selectedSample ?: return
     val selectedX = zoomedX(selected.timestampMs)
-    val selectedY = bpmToY(selected.beatsPerMinute)
+    val selectedY = msToY(selected.rmssdMs)
     if (selectedX !in plotRect.left..plotRect.right) return
 
     drawLine(

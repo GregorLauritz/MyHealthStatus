@@ -44,6 +44,9 @@ class HeartRateRepositoryImpl
                 list.map { mapToDomain(it) }
             }
 
+        override fun observeSleepHrvTimelineForSession(sessionId: String): Flow<List<HrvRecordData>> =
+            hrvDao.observeSleepHrvTimelineForSession(sessionId).map { list -> list.map { mapToDomain(it) } }
+
         override fun observeByTimeRange(
             startMs: Long,
             endMs: Long,
@@ -105,31 +108,30 @@ class HeartRateRepositoryImpl
                         resolution = HeartRateResolution.RECONSTRUCTED,
                     )
                 }.distinctUntilChanged()
-
-        private fun mapToDomain(entity: HeartRateRecordEntity): HeartRateRecordData =
-            HeartRateRecordData(
-                id = "${entity.sourceRecordRef}:${entity.timestampMs}",
-                timestampMs = entity.timestampMs,
-                beatsPerMinute = entity.beatsPerMinute,
-                recordType = entity.recordType,
-                sessionId = entity.sessionId,
-                deviceName = entity.deviceName,
-            )
-
-        private fun mapToDomain(entity: HrvRecordEntity): HrvRecordData =
-            HrvRecordData(
-                id = "${entity.sourceRecordRef}:${entity.timestampMs}",
-                timestampMs = entity.timestampMs,
-                rmssdMs = entity.rmssdMs,
-                recordType = entity.recordType,
-                sessionId = entity.sessionId,
-                deviceName = entity.deviceName,
-            )
     }
 
-// Top-level (not a class member) so it's shared by getRecoveryWindowSamples and
-// observeTimelineWithResolution without pushing HeartRateRepositoryImpl's member-function count
-// over detekt's TooManyFunctions threshold.
+// Top-level (not class members) so they're shared across HeartRateRepositoryImpl's methods
+// without pushing its member-function count over detekt's TooManyFunctions threshold.
+private fun mapToDomain(entity: HeartRateRecordEntity): HeartRateRecordData =
+    HeartRateRecordData(
+        id = "${entity.sourceRecordRef}:${entity.timestampMs}",
+        timestampMs = entity.timestampMs,
+        beatsPerMinute = entity.beatsPerMinute,
+        recordType = entity.recordType,
+        sessionId = entity.sessionId,
+        deviceName = entity.deviceName,
+    )
+
+private fun mapToDomain(entity: HrvRecordEntity): HrvRecordData =
+    HrvRecordData(
+        id = "${entity.sourceRecordRef}:${entity.timestampMs}",
+        timestampMs = entity.timestampMs,
+        rmssdMs = entity.rmssdMs,
+        recordType = entity.recordType,
+        sessionId = entity.sessionId,
+        deviceName = entity.deviceName,
+    )
+
 private fun warmSampleToDomain(timestampMs: Long, bpm: Int): HeartRateRecordData =
     HeartRateRecordData(
         id = "warm:$timestampMs",

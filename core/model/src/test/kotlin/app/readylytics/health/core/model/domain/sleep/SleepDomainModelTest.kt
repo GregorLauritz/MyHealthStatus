@@ -18,6 +18,7 @@ class SleepDomainModelTest {
             "SLEEP_BREAKDOWN_BAR",
             "SLEEP_STAGES_TIMELINE",
             "SLEEP_HR_CHART",
+            "SLEEP_HRV_CHART",
         )
         val actual = SleepTopCardId.entries.map { it.name }.toSet()
         assertEquals(expected, actual)

@@ -123,7 +123,7 @@ class SleepViewModelLayoutManagementTest {
             try {
                 advanceUntilIdle()
                 assertFalse(viewModel.uiState.value.isManagingSleepLayout)
-                assertEquals(5, viewModel.uiState.value.sleepTopCardConfigurations.size)
+                assertEquals(6, viewModel.uiState.value.sleepTopCardConfigurations.size)
 
                 viewModel.toggleSleepLayoutManagement()
                 advanceUntilIdle()

@@ -1,28 +1,19 @@
 package app.readylytics.health.feature.sleep
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -33,9 +24,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import app.readylytics.health.core.designsystem.spacing
-import app.readylytics.health.core.model.domain.repository.HeartRateRecordData
-import app.readylytics.health.core.model.domain.repository.HeartRateResolution
+import app.readylytics.health.core.model.domain.repository.HrvRecordData
 import app.readylytics.health.core.model.domain.repository.SleepSessionData
+import app.readylytics.health.core.ui.components.BaselineLegend
 import app.readylytics.health.core.ui.components.DataPointTooltip
 import app.readylytics.health.core.ui.components.DataPointTooltipData
 import app.readylytics.health.core.ui.components.DayTimelineScale
@@ -44,34 +35,25 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import app.readylytics.health.core.ui.R as CoreUiR
 
-// R2-UI-002 follow-up: SleepHrChart was already over the LongMethod/CyclomaticComplexMethod
-// detekt thresholds before Task 9 added the `resolution` parameter (which merely shifted the
-// baseline's signature-keyed IDs). Rather than re-key the pre-existing debt, this chart's state,
-// pure math, and Canvas rendering were split into SleepHrChartState.kt / SleepHrChartMath.kt /
-// SleepHrChartCanvasRenderer.kt so every function here clears detekt with no baseline entries.
-// No draw call, color, size, or conditional branch changes meaning below -- only how the logic
-// is organized into functions and files.
+// Structured like SleepHrChart.kt: state/pure-math/Canvas-rendering split across
+// SleepHrvChartState.kt / SleepHrvChartMath.kt / SleepHrvChartCanvasRenderer.kt.
 
-internal const val SLEEP_HR_GAP_THRESHOLD_MS = 10 * 60 * 1000L // 10 minutes
-internal const val SLEEP_HR_TREND_WINDOW_MS = 15 * 60 * 1000L // 15-minute centered rolling average
-internal const val SLEEP_HR_Y_TICK_COUNT = 4
-internal val SLEEP_HR_LEFT_LABEL_WIDTH = 44.dp
-internal val SLEEP_HR_BOTTOM_LABEL_HEIGHT = 20.dp
-internal val SLEEP_HR_CHART_HEIGHT = 220.dp
+// HRV (RMSSD) is sampled far more sparsely than continuous HR -- healthy overnight gaps between
+// readings routinely exceed HR's 10-minute threshold. 2 hours keeps a normal night's readings on
+// one connected line while still breaking on a genuine multi-hour sensor dropout.
+internal const val SLEEP_HRV_GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000L
+internal const val SLEEP_HRV_Y_TICK_COUNT = 4
+internal val SLEEP_HRV_LEFT_LABEL_WIDTH = 44.dp
+internal val SLEEP_HRV_BOTTOM_LABEL_HEIGHT = 20.dp
+internal val SLEEP_HRV_CHART_HEIGHT = 220.dp
 
-/** A point on the smoothed HR trend line: a rolling average, not a raw sensor sample. */
-internal data class SleepHrTrendPoint(
-    val timestampMs: Long,
-    val avgBpm: Float,
-)
-
-internal object SleepHrChartHelper {
+internal object SleepHrvChartHelper {
     fun splitIntoSegments(
-        samples: List<HeartRateRecordData>,
+        samples: List<HrvRecordData>,
         gapThresholdMs: Long,
-    ): List<List<HeartRateRecordData>> {
+    ): List<List<HrvRecordData>> {
         if (samples.isEmpty()) return emptyList()
-        val segments = mutableListOf<MutableList<HeartRateRecordData>>()
+        val segments = mutableListOf<MutableList<HrvRecordData>>()
         var current = mutableListOf(samples[0])
         for (i in 1 until samples.size) {
             if (samples[i].timestampMs - samples[i - 1].timestampMs > gapThresholdMs) {
@@ -84,45 +66,14 @@ internal object SleepHrChartHelper {
         segments.add(current)
         return segments
     }
-
-    /**
-     * Centered rolling average of bpm within [windowMs] of each sample's timestamp, computed per
-     * segment (never averages across a gap) via an O(n) sliding window over the already-sorted
-     * segment. Smooths the raw per-sample jaggedness so the overnight HR course -- and where its
-     * minimum falls in time -- reads clearly without a separate nadir marker.
-     */
-    fun computeTrendLine(
-        segment: List<HeartRateRecordData>,
-        windowMs: Long,
-    ): List<SleepHrTrendPoint> {
-        if (segment.isEmpty()) return emptyList()
-        val halfWindow = windowMs / 2
-        var lo = 0
-        var hi = 0
-        var sum = 0L
-        val result = ArrayList<SleepHrTrendPoint>(segment.size)
-        for (i in segment.indices) {
-            val t = segment[i].timestampMs
-            while (hi < segment.size && segment[hi].timestampMs <= t + halfWindow) {
-                sum += segment[hi].beatsPerMinute
-                hi++
-            }
-            while (segment[lo].timestampMs < t - halfWindow) {
-                sum -= segment[lo].beatsPerMinute
-                lo++
-            }
-            result.add(SleepHrTrendPoint(t, sum.toFloat() / (hi - lo)))
-        }
-        return result
-    }
 }
 
 @Composable
-fun SleepHrChart(
+fun SleepHrvChart(
     session: SleepSessionData?,
-    samples: List<HeartRateRecordData>,
+    samples: List<HrvRecordData>,
+    avgHrv: Float?,
     modifier: Modifier = Modifier,
-    resolution: HeartRateResolution = HeartRateResolution.RAW,
 ) {
     if (session == null || samples.isEmpty()) {
         CalibrationBar(
@@ -132,50 +83,49 @@ fun SleepHrChart(
         )
         return
     }
-    SleepHrChartContent(session = session, samples = samples, modifier = modifier, resolution = resolution)
+    SleepHrvChartContent(session = session, samples = samples, avgHrv = avgHrv, modifier = modifier)
 }
 
 @Composable
-private fun SleepHrChartContent(
+private fun SleepHrvChartContent(
     session: SleepSessionData,
-    samples: List<HeartRateRecordData>,
+    samples: List<HrvRecordData>,
+    avgHrv: Float?,
     modifier: Modifier,
-    resolution: HeartRateResolution,
 ) {
     val zoneId = remember { ZoneId.systemDefault() }
     val timeFormatter =
         remember(zoneId) { DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withZone(zoneId) }
-    val data = rememberSleepHrDerivedData(session, samples)
+    val data = rememberSleepHrvDerivedData(session, samples, avgHrv)
     val scale = remember(session.startTime, session.endTime) { DayTimelineScale(session.startTime, session.endTime) }
-    val interaction = rememberSleepHrInteractionState(session, data.sortedSamples)
+    val interaction = rememberSleepHrvInteractionState(session, data.sortedSamples)
     val pulse = rememberSleepHrPulseAnimation()
-    val style = rememberSleepHrChartStyle(timeFormatter)
+    val style = rememberSleepHrvChartStyle(timeFormatter)
 
-    val state = SleepHrChartState(session, data, scale, interaction, pulse, style, resolution)
-    SleepHrChartCanvasArea(state = state, modifier = modifier)
+    val state = SleepHrvChartState(session, data, scale, interaction, pulse, style, avgHrv)
+    SleepHrvChartCanvasArea(state = state, modifier = modifier)
 }
 
 @Composable
-private fun SleepHrChartCanvasArea(
-    state: SleepHrChartState,
+private fun SleepHrvChartCanvasArea(
+    state: SleepHrvChartState,
     modifier: Modifier,
 ) {
     var scaleX by state.interaction.scaleX
     var offsetX by state.interaction.offsetX
 
     Column(modifier = modifier) {
-        SleepHrResolutionLabel(state.resolution)
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
             val density = LocalDensity.current
-            val leftLabelWidthPx = with(density) { SLEEP_HR_LEFT_LABEL_WIDTH.toPx() }
+            val leftLabelWidthPx = with(density) { SLEEP_HRV_LEFT_LABEL_WIDTH.toPx() }
             val plotW = with(density) { maxWidth.toPx() } - leftLabelWidthPx
 
             fun zoomedX(timestampMs: Long): Float =
                 sleepHrZoomedX(timestampMs, state.scale, leftLabelWidthPx, plotW, scaleX, offsetX)
 
-            val bpmTemplate = stringResource(R.string.sleep_hr_tooltip_value)
-            val bottomLabelHeightPx = with(density) { SLEEP_HR_BOTTOM_LABEL_HEIGHT.toPx() }
-            val canvasHeightPx = with(density) { SLEEP_HR_CHART_HEIGHT.toPx() }
+            val msTemplate = stringResource(R.string.sleep_hrv_tooltip_value)
+            val bottomLabelHeightPx = with(density) { SLEEP_HRV_BOTTOM_LABEL_HEIGHT.toPx() }
+            val canvasHeightPx = with(density) { SLEEP_HRV_CHART_HEIGHT.toPx() }
 
             val tooltipState =
                 remember(
@@ -186,27 +136,27 @@ private fun SleepHrChartCanvasArea(
                     state.scale,
                     state.data.yMin,
                     state.data.yMax,
-                    bpmTemplate,
+                    msTemplate,
                 ) {
-                    computeSleepHrTooltip(
+                    computeSleepHrvTooltip(
                         selectedSample = state.interaction.selectedSample.value,
                         yMin = state.data.yMin,
                         yMax = state.data.yMax,
                         zoomedX = ::zoomedX,
                         plotBottom = canvasHeightPx - bottomLabelHeightPx,
                         timeFormatter = state.style.timeFormatter,
-                        bpmTemplate = bpmTemplate,
+                        msTemplate = msTemplate,
                     )
                 }
 
             val accessibility =
-                rememberSleepHrAccessibility(
+                rememberSleepHrvAccessibility(
                     state.data.sortedSamples,
                     state.interaction.selectedSample,
                     state.style.timeFormatter,
                 )
 
-            SleepHrChartVisuals(
+            SleepHrvChartVisuals(
                 state = state,
                 leftLabelWidthPx = leftLabelWidthPx,
                 plotW = plotW,
@@ -214,70 +164,26 @@ private fun SleepHrChartCanvasArea(
                 accessibility = accessibility,
             )
         }
-        Spacer(Modifier.height(MaterialTheme.spacing.extraSmallMedium))
-        SleepHrChartLegend(
-            lineColor = state.style.lineColor,
-            trendColor = state.style.trendColor,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        if (state.avgHrv != null) {
+            Spacer(Modifier.height(MaterialTheme.spacing.extraSmallMedium))
+            BaselineLegend(
+                value = state.avgHrv,
+                unit = stringResource(CoreUiR.string.unit_ms),
+                color = state.style.avgColor,
+                label = stringResource(R.string.sleep_hrv_avg_legend_label),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
 }
 
 @Composable
-internal fun SleepHrChartLegend(
-    lineColor: Color,
-    trendColor: Color,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.medium),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        LegendSwatch(color = lineColor, label = stringResource(R.string.sleep_hr_legend_actual))
-        LegendSwatch(color = trendColor, label = stringResource(R.string.sleep_hr_legend_trend))
-    }
-}
-
-@Composable
-internal fun LegendSwatch(
-    color: Color,
-    label: String,
-) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier =
-                Modifier
-                    .size(width = 16.dp, height = 2.dp)
-                    .background(color),
-        )
-        Spacer(Modifier.width(MaterialTheme.spacing.extraSmallMedium))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun SleepHrResolutionLabel(resolution: HeartRateResolution) {
-    if (resolution == HeartRateResolution.RECONSTRUCTED) {
-        Text(
-            text = stringResource(CoreUiR.string.heart_rate_resolution_reconstructed),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun SleepHrChartVisuals(
-    state: SleepHrChartState,
+private fun SleepHrvChartVisuals(
+    state: SleepHrvChartState,
     leftLabelWidthPx: Float,
     plotW: Float,
     tooltipState: DataPointTooltipData?,
-    accessibility: SleepHrAccessibility,
+    accessibility: SleepHrvAccessibility,
 ) {
     var scaleX by state.interaction.scaleX
     var offsetX by state.interaction.offsetX
@@ -287,8 +193,8 @@ private fun SleepHrChartVisuals(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .height(SLEEP_HR_CHART_HEIGHT)
-                .testTag("SleepHrChartCanvas")
+                .height(SLEEP_HRV_CHART_HEIGHT)
+                .testTag("SleepHrvChartCanvas")
                 .semantics {
                     contentDescription = accessibility.chartSummary
                     stateDescription = accessibility.selectedValueDescription
@@ -303,7 +209,7 @@ private fun SleepHrChartVisuals(
                     detectTapGestures { tapOffset ->
                         val tappedUnscaledX = leftLabelWidthPx + (tapOffset.x - leftLabelWidthPx - offsetX) / scaleX
                         selectedSample =
-                            resolveTappedSleepHrSample(
+                            resolveTappedSleepHrvSample(
                                 tapOffset = tapOffset,
                                 tappedUnscaledX = tappedUnscaledX,
                                 leftLabelWidthPx = leftLabelWidthPx,
@@ -315,12 +221,13 @@ private fun SleepHrChartVisuals(
                     }
                 },
     ) {
-        renderSleepHrCanvas(
+        renderSleepHrvCanvas(
             data = state.data,
             style = state.style,
             selectedSample = selectedSample,
             pulse = state.pulse,
             leftLabelWidthPx = leftLabelWidthPx,
+            avgHrv = state.avgHrv,
             zoomedX = { ts -> sleepHrZoomedX(ts, state.scale, leftLabelWidthPx, plotW, scaleX, offsetX) },
         )
     }
