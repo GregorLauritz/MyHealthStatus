@@ -15,6 +15,7 @@ import app.readylytics.health.core.model.domain.preferences.SettingsRepository
 import app.readylytics.health.core.model.domain.repository.HealthConnectPermissionRevokedException
 import app.readylytics.health.core.model.domain.scoring.SleepScoreWeightProfile
 import app.readylytics.health.core.model.domain.sync.ResyncPhase
+import app.readylytics.health.core.model.domain.widget.WidgetUpdatePort
 import dagger.Lazy
 import io.mockk.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +38,8 @@ class HealthResyncWorkerTest {
     private val foregroundSyncControllerLazy = mockk<Lazy<ForegroundSyncController>>()
     private val settingsRepository = mockk<SettingsRepository>(relaxed = true)
     private val settingsRepositoryLazy = mockk<Lazy<SettingsRepository>>()
+    private val widgetUpdatePort = mockk<WidgetUpdatePort>(relaxed = true)
+    private val widgetUpdatePortLazy = mockk<Lazy<WidgetUpdatePort>>()
 
     @Before
     fun setUp() {
@@ -48,6 +51,7 @@ class HealthResyncWorkerTest {
         every { foregroundSyncControllerLazy.get() } returns foregroundSyncController
         every { databaseReadinessGate.inspect() } returns DatabaseReadiness.Ready
         every { settingsRepositoryLazy.get() } returns settingsRepository
+        every { widgetUpdatePortLazy.get() } returns widgetUpdatePort
         coEvery { settingsRepository.userPreferences } returns
             MutableStateFlow(UserPreferences(scoringVersion = 0))
 
@@ -98,6 +102,7 @@ class HealthResyncWorkerTest {
                 result,
             )
             verify(exactly = 1) { foregroundSyncControllerLazy.get() }
+            coVerify(exactly = 1) { widgetUpdatePort.updateAllWidgets() }
             verify(exactly = 1) {
                 foregroundSyncController.onBackgroundRecalcProgress(ResyncPhase.RECOMPUTE, 1, 10)
             }
@@ -442,5 +447,6 @@ class HealthResyncWorkerTest {
             foregroundSyncController = foregroundSyncControllerLazy,
             databaseReadinessGate = databaseReadinessGate,
             settingsRepository = settingsRepositoryLazy,
+            widgetUpdatePort = widgetUpdatePortLazy,
         )
 }

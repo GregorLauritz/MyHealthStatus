@@ -133,6 +133,7 @@ class SyncViewModel
             foregroundCheckJob =
                 viewModelScope.launch {
                     runForegroundCheck()
+                    runCatching { widgetUpdatePort.get().updateAllWidgets() }
                 }
         }
 

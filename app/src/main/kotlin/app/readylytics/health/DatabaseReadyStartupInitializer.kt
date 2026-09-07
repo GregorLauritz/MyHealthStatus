@@ -8,6 +8,7 @@ import app.readylytics.health.core.model.domain.repository.WorkoutTrimpBackfillS
 import app.readylytics.health.core.model.domain.util.RetentionBounds
 import app.readylytics.health.core.model.domain.util.logD
 import app.readylytics.health.core.model.domain.util.logE
+import app.readylytics.health.core.model.domain.widget.WidgetUpdatePort
 import app.readylytics.health.core.model.workers.WorkerScheduler
 import app.readylytics.health.core.scoring.domain.scoring.BackfillHistoricalBaselinesUseCase
 import app.readylytics.health.data.preferences.PhysiologyPreferences
@@ -29,6 +30,7 @@ internal class DatabaseReadyStartupInitializer(
     private val physiologyPreferences: Lazy<PhysiologyPreferences>,
     private val workerScheduler: WorkerScheduler,
     private val workoutTrimpBackfillStatus: Lazy<WorkoutTrimpBackfillStatus>,
+    private val widgetUpdatePort: Lazy<WidgetUpdatePort>,
 ) {
     private val initialized = AtomicBoolean(false)
 
@@ -75,6 +77,9 @@ internal class DatabaseReadyStartupInitializer(
                 workerScheduler.schedulePeriodicSync(periodicSyncMinutes.toLong())
             } else {
                 workerScheduler.cancelPeriodicSync()
+            }
+            runNonFatal("Widget snapshot update") {
+                widgetUpdatePort.get().updateAllWidgets()
             }
             StartupInitializationResult.COMPLETE
         } catch (e: CancellationException) {

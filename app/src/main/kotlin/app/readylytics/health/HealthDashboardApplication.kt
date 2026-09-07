@@ -22,6 +22,7 @@ import app.readylytics.health.core.model.domain.util.LogContext
 import app.readylytics.health.core.model.domain.util.LogLevel
 import app.readylytics.health.core.model.domain.util.logD
 import app.readylytics.health.core.model.domain.util.logE
+import app.readylytics.health.core.model.domain.widget.WidgetUpdatePort
 import app.readylytics.health.core.model.workers.WorkerScheduler
 import app.readylytics.health.core.scoring.domain.scoring.BackfillHistoricalBaselinesUseCase
 import app.readylytics.health.crashreport.CrashReportHandler
@@ -60,6 +61,9 @@ class HealthDashboardApplication :
 
     @Inject
     lateinit var workoutTrimpBackfillStatus: Lazy<WorkoutTrimpBackfillStatus>
+
+    @Inject
+    lateinit var widgetUpdatePort: Lazy<WidgetUpdatePort>
 
     @Inject
     lateinit var healthSyncUseCase: Lazy<HealthSyncUseCase>
@@ -127,6 +131,7 @@ class HealthDashboardApplication :
                 physiologyPreferences = physiologyPreferences,
                 workerScheduler = workerScheduler,
                 workoutTrimpBackfillStatus = workoutTrimpBackfillStatus,
+                widgetUpdatePort = widgetUpdatePort,
             )
         val startupCoordinator = DatabaseReadyStartupCoordinator(startupInitializer)
         val preferencesPrewarmer = PreferencesPrewarmer(settingsRepo)

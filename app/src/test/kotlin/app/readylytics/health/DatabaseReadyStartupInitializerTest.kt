@@ -6,6 +6,7 @@ import app.readylytics.health.core.model.data.preferences.SettingsDefaults
 import app.readylytics.health.core.model.data.preferences.UserPreferences
 import app.readylytics.health.core.model.domain.migration.DatabaseReadiness
 import app.readylytics.health.core.model.domain.repository.WorkoutTrimpBackfillStatus
+import app.readylytics.health.core.model.domain.widget.WidgetUpdatePort
 import app.readylytics.health.core.model.workers.WorkerScheduler
 import app.readylytics.health.core.scoring.domain.scoring.BackfillHistoricalBaselinesUseCase
 import app.readylytics.health.data.preferences.PhysiologyPreferences
@@ -43,6 +44,8 @@ class DatabaseReadyStartupInitializerTest {
     private val physiologyPreferences = mockk<PhysiologyPreferences>(relaxed = true)
     private val physiologyPreferencesLazy = mockk<Lazy<PhysiologyPreferences>>()
     private val workerScheduler = mockk<WorkerScheduler>(relaxed = true)
+    private val widgetUpdatePort = mockk<WidgetUpdatePort>(relaxed = true)
+    private val widgetUpdatePortLazy = mockk<Lazy<WidgetUpdatePort>>()
 
     @Test
     fun `migration-required startup does not resolve Room-backed lazies or schedule work`() =
@@ -59,6 +62,7 @@ class DatabaseReadyStartupInitializerTest {
             verify(exactly = 0) { workerScheduler.scheduleBirthdayWorker() }
             verify(exactly = 0) { workerScheduler.scheduleDataCleanupWorker() }
             verify(exactly = 0) { workerScheduler.schedulePeriodicSync(any()) }
+            verify(exactly = 0) { widgetUpdatePortLazy.get() }
         }
 
     @Test
@@ -87,6 +91,7 @@ class DatabaseReadyStartupInitializerTest {
             verify(exactly = 1) { workerScheduler.scheduleDataCleanupWorker() }
             verify(exactly = 1) { workerScheduler.schedulePeriodicSync(30L) }
             verify(exactly = 0) { workerScheduler.cancelPeriodicSync() }
+            coVerify(exactly = 1) { widgetUpdatePort.updateAllWidgets() }
         }
 
     @Test
@@ -266,6 +271,7 @@ class DatabaseReadyStartupInitializerTest {
     private fun createInitializer(): DatabaseReadyStartupInitializer {
         every { settingsRepositoryLazy.get() } returns settingsRepository
         every { physiologyPreferencesLazy.get() } returns physiologyPreferences
+        every { widgetUpdatePortLazy.get() } returns widgetUpdatePort
         every { settingsRepository.userPreferences } returns
             flowOf(
                 UserPreferences(
@@ -284,6 +290,7 @@ class DatabaseReadyStartupInitializerTest {
                         override suspend fun hasUnbackfilledWorkouts(retentionStartMs: Long): Boolean = false
                     }
                 },
+            widgetUpdatePort = widgetUpdatePortLazy,
         )
     }
 }

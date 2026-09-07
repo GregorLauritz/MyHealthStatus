@@ -7,6 +7,7 @@ import app.readylytics.health.core.model.data.preferences.UserPreferences
 import app.readylytics.health.core.model.domain.migration.DatabaseReadiness
 import app.readylytics.health.core.model.domain.repository.WorkoutTrimpBackfillStatus
 import app.readylytics.health.core.model.domain.util.RetentionBounds
+import app.readylytics.health.core.model.domain.widget.WidgetUpdatePort
 import app.readylytics.health.core.model.workers.WorkerScheduler
 import app.readylytics.health.core.scoring.domain.scoring.BackfillHistoricalBaselinesUseCase
 import app.readylytics.health.data.preferences.PhysiologyPreferences
@@ -265,6 +266,7 @@ class DatabaseReadyStartupInitializerScoringVersionTest {
             physiologyPreferences = physiologyLazy,
             workerScheduler = scheduler,
             workoutTrimpBackfillStatus = Lazy { backfillStatus },
+            widgetUpdatePort = Lazy { mockk<WidgetUpdatePort>(relaxed = true) },
         )
     }
 

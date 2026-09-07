@@ -14,6 +14,7 @@ import app.readylytics.health.core.model.domain.model.Result
 import app.readylytics.health.core.model.domain.preferences.SettingsRepository
 import app.readylytics.health.core.model.domain.scoring.TrainingReadinessConfig
 import app.readylytics.health.core.model.domain.util.RetentionBounds
+import app.readylytics.health.core.model.domain.widget.WidgetUpdatePort
 import dagger.Lazy
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -40,6 +41,8 @@ class HealthResyncWorkerScoringVersionTest {
     private val foregroundSyncControllerLazy = mockk<Lazy<ForegroundSyncController>>()
     private val settingsRepository = mockk<SettingsRepository>(relaxed = true)
     private val settingsRepositoryLazy = mockk<Lazy<SettingsRepository>>()
+    private val widgetUpdatePort = mockk<WidgetUpdatePort>(relaxed = true)
+    private val widgetUpdatePortLazy = mockk<Lazy<WidgetUpdatePort>>()
 
     @Before
     fun setUp() {
@@ -51,6 +54,7 @@ class HealthResyncWorkerScoringVersionTest {
         every { foregroundSyncControllerLazy.get() } returns foregroundSyncController
         every { databaseReadinessGate.inspect() } returns DatabaseReadiness.Ready
         every { settingsRepositoryLazy.get() } returns settingsRepository
+        every { widgetUpdatePortLazy.get() } returns widgetUpdatePort
 
         val progressUpdater = mockk<androidx.work.ProgressUpdater>()
         every { workerParams.progressUpdater } returns progressUpdater
@@ -309,5 +313,6 @@ class HealthResyncWorkerScoringVersionTest {
             foregroundSyncController = foregroundSyncControllerLazy,
             databaseReadinessGate = databaseReadinessGate,
             settingsRepository = settingsRepositoryLazy,
+            widgetUpdatePort = widgetUpdatePortLazy,
         )
 }

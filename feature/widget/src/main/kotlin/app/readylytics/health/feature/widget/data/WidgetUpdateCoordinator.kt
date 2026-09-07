@@ -40,6 +40,7 @@ open class WidgetUpdateCoordinator
         override suspend fun updateAllWidgets() {
             try {
                 val snapshot = buildLatestSnapshot()
+                persistSnapshot(snapshot)
                 val manager = createWidgetManager()
 
                 val updatedCount =
@@ -58,6 +59,10 @@ open class WidgetUpdateCoordinator
             } catch (e: Exception) {
                 logE(TAG, e) { "Failed to update Glance widgets" }
             }
+        }
+
+        internal open suspend fun persistSnapshot(snapshot: WidgetSnapshot) {
+            WidgetSnapshotDefinition.getDataStore(context, "").updateData { snapshot }
         }
 
         internal open fun createWidgetManager(): GlanceAppWidgetManager = GlanceAppWidgetManager(context)

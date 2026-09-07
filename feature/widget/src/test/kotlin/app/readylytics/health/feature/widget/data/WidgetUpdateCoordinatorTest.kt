@@ -164,6 +164,7 @@ class WidgetUpdateCoordinatorTest {
                 )
 
             every { coordinator.createWidgetManager() } returns mockk(relaxed = true)
+            coEvery { coordinator.persistSnapshot(any()) } returns Unit
 
             coEvery {
                 coordinator.updateWidgetGroup(any(), any<RecoveryGlanceWidget>(), any(), any())
@@ -180,6 +181,7 @@ class WidgetUpdateCoordinatorTest {
             // Should not throw, and remaining groups should still be updated
             coordinator.updateAllWidgets()
 
+            coVerify(exactly = 1) { coordinator.persistSnapshot(any()) }
             coVerify(exactly = 1) {
                 coordinator.updateWidgetGroup(any(), any<RecoveryGlanceWidget>(), any(), any())
             }
@@ -214,11 +216,43 @@ class WidgetUpdateCoordinatorTest {
                 )
 
             every { coordinator.createWidgetManager() } returns mockk(relaxed = true)
+            coEvery { coordinator.persistSnapshot(any()) } returns Unit
 
             coEvery {
                 coordinator.updateWidgetGroup(any(), any<RecoveryGlanceWidget>(), any(), any())
             } throws CancellationException("Widget update cancelled")
 
             coordinator.updateAllWidgets()
+        }
+
+    @Test
+    fun updateAllWidgets_alwaysPersistsSnapshotEvenWhenNoWidgetsPresent() =
+        runTest {
+            val dailySummaryRepo = mockk<DailySummaryRepository>()
+            val prefsReader = mockk<UserPreferencesReader>()
+
+            val today = LocalDate.now()
+            val summary = DailySummary(date = today, sleepScore = 85f)
+            val prefs = UserPreferences()
+
+            coEvery { dailySummaryRepo.getByDate(any()) } returns summary
+            coEvery { prefsReader.userPreferences } returns flowOf(prefs)
+
+            val coordinator =
+                spyk(
+                    WidgetUpdateCoordinator(
+                        context = mockk(relaxed = true),
+                        dailySummaryRepository = dailySummaryRepo,
+                        preferencesReader = prefsReader,
+                    ),
+                )
+
+            val mockManager = mockk<androidx.glance.appwidget.GlanceAppWidgetManager>(relaxed = true)
+            every { coordinator.createWidgetManager() } returns mockManager
+            coEvery { coordinator.persistSnapshot(any()) } returns Unit
+
+            coordinator.updateAllWidgets()
+
+            coVerify(exactly = 1) { coordinator.persistSnapshot(match { it.sleepScore == 85 }) }
         }
 }

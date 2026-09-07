@@ -24,6 +24,7 @@ import app.readylytics.health.core.model.domain.sync.ResyncPhase
 import app.readylytics.health.core.model.domain.sync.ScoreInvalidation
 import app.readylytics.health.core.model.domain.util.RetentionBounds
 import app.readylytics.health.core.model.domain.util.logE
+import app.readylytics.health.core.model.domain.widget.WidgetUpdatePort
 import dagger.Lazy
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -55,6 +56,7 @@ class HealthResyncWorker
         private val foregroundSyncController: Lazy<ForegroundSyncController>,
         private val databaseReadinessGate: DatabaseReadinessInspector,
         private val settingsRepository: Lazy<SettingsRepository>,
+        private val widgetUpdatePort: Lazy<WidgetUpdatePort>,
     ) : CoroutineWorker(appContext, params) {
         // Progress notifications (posted from runNormalRecompute/runTrainingReadinessProjection)
         // are best-effort (wrapped in runCatching); POST_NOTIFICATIONS is declared in the manifest
@@ -132,6 +134,7 @@ class HealthResyncWorker
             return if (result.isSuccess) {
                 onSuccessChanged(true)
                 persistPostRecomputeState(recomputeOnly = recomputeOnly, rangeOverride = rangeOverride)
+                widgetUpdatePort.get().updateAllWidgets()
                 Result.success()
             } else {
                 // Transient HC/IO failure: let WorkManager retry with its backoff policy.
@@ -191,6 +194,7 @@ class HealthResyncWorker
             return if (result.isSuccess) {
                 settingsRepository.get().updateTrainingReadinessConfig(config)
                 onSuccessChanged(true)
+                widgetUpdatePort.get().updateAllWidgets()
                 Result.success()
             } else {
                 Result.retry()
