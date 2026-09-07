@@ -1,6 +1,6 @@
 # Idea: Android Material 3 Glance Home Screen Widgets
 
-> **Status:** CONCEPT / BACKLOG — Captured 2026-09-03.
+> **Status:** IMPLEMENTED — Implemented via `:feature:widget`. See design spec [`docs/superpowers/specs/2026-09-07-home-screen-widgets-design.md`](../../docs/superpowers/specs/2026-09-07-home-screen-widgets-design.md) and implementation plan [`docs/superpowers/plans/2026-09-07-home-screen-widgets.md`](../../docs/superpowers/plans/2026-09-07-home-screen-widgets.md).
 
 ## 1. Problem Statement & Motivation
 

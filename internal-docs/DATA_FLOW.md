@@ -1940,6 +1940,14 @@ defaults when unset).
 | `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/workouts/WorkoutsLayoutRepository.kt`             | UI — workouts layout contract                       | Interface for observing and updating workout cards, diagram, and history configurations |
 | `app/src/main/kotlin/app/readylytics/health/data/preferences/WorkoutsLayoutRepositoryImpl.kt`                | UI — workouts layout store implementation           | Proto DataStore persistence, default auto-healing/appending, and proto/domain mapping for workouts tab layout |
 | `feature/workouts/src/main/kotlin/app/readylytics/health/feature/workouts/WorkoutsFlowIntermediate.kt`       | UI — workouts tab reactive flow assembly            | Merges workout/daily-summary domain state with reactive `WorkoutsLayoutRepository` layout configurations |
+| `core/model/src/main/kotlin/app/readylytics/health/core/model/domain/widget/WidgetUpdatePort.kt`                         | UI / Widget — widget update contract                | Interface for triggering push updates to home screen widgets on sync/recalc completion |
+| `feature/widget/src/main/kotlin/app/readylytics/health/feature/widget/data/WidgetUpdateCoordinator.kt`                   | UI / Widget — update coordinator                    | Implements `WidgetUpdatePort`, builds snapshot and updates Glance widget state          |
+| `feature/widget/src/main/kotlin/app/readylytics/health/feature/widget/data/WidgetSnapshot.kt`                            | UI / Widget — snapshot DTO                          | Immutable JSON-serializable snapshot of dashboard/vitals/strain metrics for Glance     |
+| `feature/widget/src/main/kotlin/app/readylytics/health/feature/widget/data/WidgetSnapshotDefinition.kt`                  | UI / Widget — Glance state definition               | Connects Glance widgets to JSON DataStore without Room database access                  |
+| `feature/widget/src/main/kotlin/app/readylytics/health/feature/widget/ui/RecoveryGlanceWidget.kt`                        | UI / Widget — 2x2 Glance widget                     | Compact readiness, sleep score & duration, circadian consistency badge                  |
+| `feature/widget/src/main/kotlin/app/readylytics/health/feature/widget/ui/StrainRecoveryWidget.kt`                        | UI / Widget — 4x2 Glance widget                     | Multi-metric readiness, sleep stages, and strain/steps layout                          |
+| `feature/widget/src/main/kotlin/app/readylytics/health/feature/widget/ui/VitalsStripWidget.kt`                           | UI / Widget — 4x1 Glance widget                     | Minimal vitals strip (RHR, nocturnal HRV lnRMSSD, sleep duration, steps)                |
+| `feature/widget/src/main/kotlin/app/readylytics/health/feature/widget/navigation/WidgetDeepLinkHandler.kt`               | UI / Widget — deep link navigation                  | PendingIntent factory for routing widget taps to MainActivity navigation destinations   |
 
 ### 3.5 Dashboard Insight Card Derivation & Dismissal Flow
 
@@ -2102,4 +2110,46 @@ Key behaviors:
 
 ---
 
+### 3.9 Home Screen Widget Presentation Pipeline (:feature:widget)
+
+Android Home Screen widgets are implemented using Jetpack Glance (`androidx.glance:glance-appwidget` and `androidx.glance:glance-material3`) in the `:feature:widget` module. Three widget form factors are provided:
+1. **2x2 Recovery Glance (`RecoveryGlanceWidget`):** Circular Readiness gauge, sleep score/duration, circadian consistency badge, deep-link to Dashboard.
+2. **4x2 Daily Strain & Recovery (`StrainRecoveryWidget`):** Split layout featuring Readiness gauge with calibration pill, sleep stage metrics (Deep/REM), strain ratio gauge with target and steps, deep-links into respective Dashboard, Sleep, and Workouts tabs.
+3. **4x1 Minimal Vitals Strip (`VitalsStripWidget`):** Horizontal strip displaying resting heart rate with delta pill, nocturnal HRV lnRMSSD, sleep duration, and daily steps with progress bar, deep-link to Vitals/Dashboard.
+
+```
+Room / HealthDatabase (SQLCipher encrypted)
+  │
+  ▼ observed via DailySummaryRepository + UserPreferencesReader
+Sync / Recalc Completion (SyncViewModel via syncCompletedEvent or Background Recalc)
+  │
+  ▼ triggers
+WidgetUpdatePort (core/model/.../domain/widget/WidgetUpdatePort.kt)
+  │
+  ▼ implemented by
+WidgetUpdateCoordinator (feature/widget/.../data/WidgetUpdateCoordinator.kt)
+  │
+  ▼ reads DailySummary for today's midnight in scoringZone & maps via WidgetSnapshotMapper
+WidgetSnapshot (pure Kotlin data structure serialized to JSON)
+  │
+  ▼ updateAppWidgetState(context, WidgetSnapshotDefinition, glanceId)
+Glance DataStore ("readylytics_widget_snapshot.json" via WidgetSnapshotSerializer)
+  │
+  ▼ GlanceAppWidgetManager.update(context, glanceId)
+Glance App Widgets (RemoteViews via Jetpack Glance Compose runtime)
+  ├── RecoveryGlanceWidget (2x2)
+  ├── StrainRecoveryWidget (4x2)
+  └── VitalsStripWidget (4x1)
+```
+
+Key Architectural Guarantees:
+- **Decoupling from SQLCipher Room Database:** RemoteViews and broadcast receivers in Android AppWidget execution paths NEVER touch the encrypted SQLCipher Room database directly. Direct database access from widget broadcasts risks SQLite connection/lock contention with foreground sync and background WorkManager jobs, as well as decryption overhead on the UI/system server binder thread.
+- **Glance State Definition (`WidgetSnapshotDefinition`):** Widgets declare `override val stateDefinition = WidgetSnapshotDefinition`, which points to a dedicated JSON DataStore (`readylytics_widget_snapshot.json`). Widgets read current state strictly via `currentState<WidgetSnapshot>()`.
+- **Push-Based Updates via `WidgetUpdateCoordinator`:** Updates are pushed to Glance widgets by `WidgetUpdateCoordinator` (implementing `WidgetUpdatePort`). Whenever foreground sync or background resync completes (e.g., `SyncViewModel` collecting `ForegroundSyncController.syncCompletedEvent`), the coordinator builds a fresh snapshot for the current date in the user's active scoring timezone and pushes it across all active glance IDs before requesting widget recomposition.
+- **Granular Deep-Link Navigation:** Widgets construct pending intents via `WidgetDeepLinkHandler.createPendingIntent(context, destination)` pointing to `MainActivity` with `EXTRA_NAV_DESTINATION` (`dashboard`, `sleep`, `workouts`, or `vitals`). `MainActivity` extracts the destination on launch or `onNewIntent`, routing `MainNavigationState` to the designated top-level tab.
+- **Dynamic Theming & Contrast Resilience:** Widgets use `WidgetGlanceTheme` (wrapping `GlanceTheme`) to inherit dynamic Material You color schemes on Android 12+ while supplying fallback container colors and high-contrast styling across light and dark system modes.
+
+---
+
 Keep this document synchronized with the source.
+
