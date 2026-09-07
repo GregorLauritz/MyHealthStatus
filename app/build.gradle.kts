@@ -351,6 +351,7 @@ dependencies {
     implementation(project(":feature:sleep"))
     implementation(project(":feature:vitals"))
     implementation(project(":feature:workouts"))
+    implementation(project(":feature:widget"))
     implementation(project(":core:model"))
     implementation(project(":core:database-schema"))
     implementation(project(":core:designsystem"))
