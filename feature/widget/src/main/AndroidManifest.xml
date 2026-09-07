@@ -12,5 +12,16 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/recovery_glance_widget_info" />
         </receiver>
+        <receiver
+            android:name=".receiver.StrainRecoveryWidgetReceiver"
+            android:label="@string/widget_strain_4x2_name"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/strain_recovery_widget_info" />
+        </receiver>
     </application>
 </manifest>

@@ -15,6 +15,7 @@
     <string name="widget_deep_rem_format">Deep: %1$d%% • REM: %2$d%%</string>
     <string name="widget_bpm_format">%1$d bpm</string>
     <string name="widget_ms_format">%1$d ms</string>
+    <string name="widget_steps_format">%1$s steps</string>
 
     <string name="widget_recovery_2x2_name">Readylytics Recovery (2x2)</string>
     <string name="widget_recovery_2x2_desc">Compact Readiness and Sleep recovery scores.</string>
