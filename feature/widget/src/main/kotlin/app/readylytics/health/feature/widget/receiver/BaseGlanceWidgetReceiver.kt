@@ -40,7 +40,7 @@ abstract class BaseGlanceWidgetReceiver(
     }
 
     internal fun triggerWidgetUpdate(context: Context) {
-        val pendingResult = goAsync()
+        val pendingResult = runCatching { goAsync() }.getOrNull()
         CoroutineScope(ioDispatcher).launch {
             try {
                 resolveWidgetUpdatePort(context).updateAllWidgets()
@@ -49,7 +49,7 @@ abstract class BaseGlanceWidgetReceiver(
             } catch (e: Exception) {
                 logE(TAG, e) { "Failed to trigger widget update from receiver" }
             } finally {
-                pendingResult.finish()
+                runCatching { pendingResult?.finish() }
             }
         }
     }

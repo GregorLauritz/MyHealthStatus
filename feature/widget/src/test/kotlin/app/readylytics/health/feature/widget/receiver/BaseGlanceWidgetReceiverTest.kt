@@ -47,4 +47,14 @@ class BaseGlanceWidgetReceiverTest {
 
         coVerify(exactly = 1) { widgetUpdatePort.updateAllWidgets() }
     }
+
+    @Test
+    fun triggerWidgetUpdate_whenGoAsyncReturnsNull_stillUpdatesWithoutException() {
+        val receiver = spyk(TestGlanceWidgetReceiver(widgetUpdatePort))
+        every { receiver.goAsync() } returns null
+
+        receiver.triggerWidgetUpdate(context)
+
+        coVerify(exactly = 1) { widgetUpdatePort.updateAllWidgets() }
+    }
 }
