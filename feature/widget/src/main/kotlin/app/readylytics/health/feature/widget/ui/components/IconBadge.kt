@@ -3,7 +3,6 @@ package app.readylytics.health.feature.widget.ui.components
 import androidx.annotation.DrawableRes
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 import androidx.glance.ColorFilter
 import androidx.glance.GlanceComposable
 import androidx.glance.GlanceModifier
@@ -15,6 +14,7 @@ import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
 import androidx.glance.layout.size
+import app.readylytics.health.feature.widget.ui.WidgetLayoutSpec
 
 @Composable
 @GlanceComposable
@@ -22,8 +22,8 @@ fun IconBadge(
     @DrawableRes iconResId: Int,
     contentDescription: String?,
     modifier: GlanceModifier = GlanceModifier,
-    size: Dp = 28.dp,
-    iconSize: Dp = 16.dp,
+    size: Dp = WidgetLayoutSpec.iconBadgeSize,
+    iconSize: Dp = WidgetLayoutSpec.iconSize,
 ) {
     Box(
         modifier =

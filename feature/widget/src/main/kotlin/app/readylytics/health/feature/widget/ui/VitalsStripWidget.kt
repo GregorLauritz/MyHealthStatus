@@ -22,6 +22,7 @@ import androidx.glance.layout.Column
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxHeight
+import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.text.FontWeight
@@ -76,14 +77,38 @@ class VitalsStripWidget : GlanceAppWidget() {
                 targetTab = WidgetDeepLinkHandler.TAB_WORKOUTS,
             )
         val isCompact = LocalSize.current.height < 60.dp
+        val layout =
+            WidgetLayoutSpec.vitals(
+                widthDp =
+                    LocalSize.current.width.value
+                        .toInt(),
+                heightDp =
+                    LocalSize.current.height.value
+                        .toInt(),
+            )
 
         WidgetSurface(
-            modifier = GlanceModifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            modifier =
+                GlanceModifier.padding(
+                    horizontal =
+                        if (isCompact) {
+                            WidgetLayoutSpec.compactStripHorizontalPadding
+                        } else {
+                            WidgetLayoutSpec.standardOuterHorizontalPadding
+                        },
+                    vertical =
+                        if (isCompact) {
+                            WidgetLayoutSpec.compactStripVerticalPadding
+                        } else {
+                            WidgetLayoutSpec.standardOuterVerticalPadding
+                        },
+                ),
         ) {
             VitalsRow(
                 context = context,
                 snapshot = snapshot,
                 isCompact = isCompact,
+                showDelta = layout.showDelta,
                 vitalsAction = actionStartActivity(vitalsIntent),
                 workoutsAction = actionStartActivity(workoutsIntent),
             )
@@ -96,11 +121,12 @@ class VitalsStripWidget : GlanceAppWidget() {
         context: Context,
         snapshot: WidgetSnapshot,
         isCompact: Boolean,
+        showDelta: Boolean,
         vitalsAction: Action,
         workoutsAction: Action,
     ) {
         Row(
-            modifier = GlanceModifier.fillMaxHeight(),
+            modifier = GlanceModifier.fillMaxWidth().fillMaxHeight(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // 1: RHR
@@ -110,12 +136,13 @@ class VitalsStripWidget : GlanceAppWidget() {
                 value =
                     snapshot.restingHeartRate?.let { context.getString(R.string.widget_bpm_format, it) }
                         ?: context.getString(R.string.widget_placeholder_value),
-                delta = if (!isCompact) WidgetDeltaFormatter.formatRhrDelta(context, snapshot) else null,
+                delta = if (showDelta) WidgetDeltaFormatter.formatRhrDelta(context, snapshot) else null,
+                compact = isCompact,
                 onClick = vitalsAction,
                 modifier = GlanceModifier.defaultWeight(),
             )
 
-            SubtleDivider(isVertical = true, modifier = GlanceModifier.padding(vertical = 4.dp))
+            SubtleDivider(isVertical = true)
 
             // 2: HRV
             VitalsCell(
@@ -124,12 +151,13 @@ class VitalsStripWidget : GlanceAppWidget() {
                 value =
                     snapshot.nocturnalHrv?.let { context.getString(R.string.widget_ms_format, it) }
                         ?: context.getString(R.string.widget_placeholder_value),
-                delta = if (!isCompact) WidgetDeltaFormatter.formatHrvDelta(context, snapshot) else null,
+                delta = if (showDelta) WidgetDeltaFormatter.formatHrvDelta(context, snapshot) else null,
+                compact = isCompact,
                 onClick = vitalsAction,
                 modifier = GlanceModifier.defaultWeight(),
             )
 
-            SubtleDivider(isVertical = true, modifier = GlanceModifier.padding(vertical = 4.dp))
+            SubtleDivider(isVertical = true)
 
             // 3: SpO2
             VitalsCell(
@@ -137,11 +165,12 @@ class VitalsStripWidget : GlanceAppWidget() {
                 label = context.getString(R.string.widget_spo2_title),
                 value = snapshot.avgSpo2Formatted ?: context.getString(R.string.widget_placeholder_value),
                 delta = null,
+                compact = isCompact,
                 onClick = vitalsAction,
                 modifier = GlanceModifier.defaultWeight(),
             )
 
-            SubtleDivider(isVertical = true, modifier = GlanceModifier.padding(vertical = 4.dp))
+            SubtleDivider(isVertical = true)
 
             // 4: Steps
             VitalsCell(
@@ -149,6 +178,7 @@ class VitalsStripWidget : GlanceAppWidget() {
                 label = context.getString(R.string.widget_steps_title),
                 value = snapshot.stepCountFormatted ?: context.getString(R.string.widget_placeholder_value),
                 delta = null,
+                compact = isCompact,
                 onClick = workoutsAction,
                 modifier = GlanceModifier.defaultWeight(),
             )
@@ -162,6 +192,7 @@ class VitalsStripWidget : GlanceAppWidget() {
         label: String,
         value: String,
         delta: String?,
+        compact: Boolean,
         onClick: Action,
         modifier: GlanceModifier = GlanceModifier,
     ) {
@@ -169,13 +200,13 @@ class VitalsStripWidget : GlanceAppWidget() {
             modifier =
                 modifier
                     .fillMaxHeight()
-                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                    .padding(horizontal = WidgetLayoutSpec.compactCellHorizontalPadding)
                     .clickable(onClick),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalAlignment = Alignment.CenterVertically,
+            verticalAlignment = Alignment.Top,
         ) {
             IconBadge(iconResId = iconRes, contentDescription = label)
-            Spacer(modifier = GlanceModifier.height(2.dp))
+            Spacer(modifier = GlanceModifier.height(WidgetLayoutSpec.iconToLabelSpacing))
             Text(
                 text = label,
                 style =
@@ -184,15 +215,17 @@ class VitalsStripWidget : GlanceAppWidget() {
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Medium,
                     ),
+                maxLines = 1,
             )
             Text(
                 text = value,
                 style =
                     TextStyle(
                         color = GlanceTheme.colors.onSurface,
-                        fontSize = 13.sp,
+                        fontSize = if (compact) 12.sp else 13.sp,
                         fontWeight = FontWeight.Bold,
                     ),
+                maxLines = 1,
             )
             if (delta != null) {
                 Text(
@@ -202,6 +235,7 @@ class VitalsStripWidget : GlanceAppWidget() {
                             color = GlanceTheme.colors.onSurfaceVariant,
                             fontSize = 9.sp,
                         ),
+                    maxLines = 1,
                 )
             }
         }

@@ -20,13 +20,16 @@ import androidx.glance.text.TextStyle
 fun StatusPill(
     text: String,
     modifier: GlanceModifier = GlanceModifier,
+    compact: Boolean = false,
 ) {
+    val horizontalPadding = if (compact) 6.dp else 8.dp
+    val textSize = if (compact) 10.sp else 11.sp
     Box(
         modifier =
             GlanceModifier
                 .background(GlanceTheme.colors.secondaryContainer)
                 .cornerRadius(12.dp)
-                .padding(horizontal = 8.dp, vertical = 3.dp)
+                .padding(horizontal = horizontalPadding, vertical = 3.dp)
                 .then(modifier),
         contentAlignment = Alignment.Center,
     ) {
@@ -35,9 +38,10 @@ fun StatusPill(
             style =
                 TextStyle(
                     color = GlanceTheme.colors.onSecondaryContainer,
-                    fontSize = 11.sp,
+                    fontSize = textSize,
                     fontWeight = FontWeight.Medium,
                 ),
+            maxLines = 1,
         )
     }
 }

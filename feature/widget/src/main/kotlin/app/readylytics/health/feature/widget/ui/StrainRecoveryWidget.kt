@@ -25,6 +25,8 @@ import androidx.glance.layout.Column
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxHeight
+import androidx.glance.layout.fillMaxWidth
+import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.layout.size
 import androidx.glance.text.FontWeight
@@ -70,33 +72,49 @@ class StrainRecoveryWidget : GlanceAppWidget() {
         context: Context,
         snapshot: WidgetSnapshot,
     ) {
-        val isCompact = LocalSize.current.height < 120.dp
+        val layout =
+            WidgetLayoutSpec.strain(
+                widthDp =
+                    LocalSize.current.width.value
+                        .toInt(),
+                heightDp =
+                    LocalSize.current.height.value
+                        .toInt(),
+            )
 
-        WidgetSurface(modifier = GlanceModifier.padding(10.dp)) {
+        WidgetSurface(
+            modifier =
+                GlanceModifier.padding(
+                    horizontal = WidgetLayoutSpec.standardOuterHorizontalPadding,
+                    vertical = WidgetLayoutSpec.standardOuterVerticalPadding,
+                ),
+        ) {
             Row(
-                modifier = GlanceModifier.fillMaxHeight(),
+                modifier = GlanceModifier.fillMaxWidth().fillMaxHeight(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 ReadinessColumn(
                     context = context,
                     snapshot = snapshot,
+                    layout = layout,
                     modifier = GlanceModifier.defaultWeight(),
                 )
 
-                SubtleDivider(isVertical = true, modifier = GlanceModifier.padding(vertical = 4.dp))
+                SubtleDivider(isVertical = true)
 
                 SleepColumn(
                     context = context,
                     snapshot = snapshot,
-                    isCompact = isCompact,
+                    layout = layout,
                     modifier = GlanceModifier.defaultWeight(),
                 )
 
-                SubtleDivider(isVertical = true, modifier = GlanceModifier.padding(vertical = 4.dp))
+                SubtleDivider(isVertical = true)
 
                 StrainColumn(
                     context = context,
                     snapshot = snapshot,
+                    layout = layout,
                     modifier = GlanceModifier.defaultWeight(),
                 )
             }
@@ -108,25 +126,36 @@ class StrainRecoveryWidget : GlanceAppWidget() {
     private fun ColumnHeader(
         @DrawableRes iconResId: Int,
         title: String,
+        stack: Boolean,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconBadge(
-                iconResId = iconResId,
-                contentDescription = title,
-                size = 24.dp,
-                iconSize = 14.dp,
-            )
-            Text(
-                text = title,
-                style =
-                    TextStyle(
-                        color = GlanceTheme.colors.onSurfaceVariant,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                    ),
-                modifier = GlanceModifier.padding(start = 4.dp),
-            )
+        if (stack) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                IconBadge(iconResId = iconResId, contentDescription = title)
+                Spacer(modifier = GlanceModifier.height(WidgetLayoutSpec.iconToLabelSpacing))
+                HeaderText(title)
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconBadge(iconResId = iconResId, contentDescription = title)
+                Spacer(modifier = GlanceModifier.size(WidgetLayoutSpec.iconToLabelSpacing))
+                HeaderText(title)
+            }
         }
+    }
+
+    @Composable
+    @GlanceComposable
+    private fun HeaderText(title: String) {
+        Text(
+            text = title,
+            style =
+                TextStyle(
+                    color = GlanceTheme.colors.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                ),
+            maxLines = 1,
+        )
     }
 
     @Composable
@@ -134,6 +163,7 @@ class StrainRecoveryWidget : GlanceAppWidget() {
     private fun ReadinessColumn(
         context: Context,
         snapshot: WidgetSnapshot,
+        layout: WidgetLayoutSpec.Strain,
         modifier: GlanceModifier = GlanceModifier,
     ) {
         val dashboardIntent =
@@ -146,12 +176,13 @@ class StrainRecoveryWidget : GlanceAppWidget() {
             modifier =
                 modifier
                     .fillMaxHeight()
-                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                    .padding(horizontal = WidgetLayoutSpec.compactCellHorizontalPadding)
                     .clickable(actionStartActivity(dashboardIntent)),
         ) {
             ColumnHeader(
                 iconResId = R.drawable.ic_widget_sparkle,
                 title = context.getString(R.string.widget_readiness_title),
+                stack = layout.stackHeader,
             )
 
             val readinessScoreText =
@@ -168,7 +199,7 @@ class StrainRecoveryWidget : GlanceAppWidget() {
             )
 
             Spacer(modifier = GlanceModifier.defaultWeight())
-            ReadinessStatus(context, snapshot)
+            ReadinessStatus(context, snapshot, compact = layout.stackHeader)
         }
     }
 
@@ -177,15 +208,17 @@ class StrainRecoveryWidget : GlanceAppWidget() {
     private fun ReadinessStatus(
         context: Context,
         snapshot: WidgetSnapshot,
+        compact: Boolean,
     ) {
         when {
             snapshot.isCalibrating ->
                 StatusPill(
                     text = context.getString(R.string.widget_calibrating_format, snapshot.calibrationDays),
+                    compact = compact,
                 )
             snapshot.readinessCategory != null -> {
                 ReadinessStatusFormatter.format(context, snapshot.readinessCategory)?.let { categoryLabel ->
-                    StatusPill(text = categoryLabel)
+                    StatusPill(text = categoryLabel, compact = compact)
                 }
             }
         }
@@ -196,7 +229,7 @@ class StrainRecoveryWidget : GlanceAppWidget() {
     private fun SleepColumn(
         context: Context,
         snapshot: WidgetSnapshot,
-        isCompact: Boolean,
+        layout: WidgetLayoutSpec.Strain,
         modifier: GlanceModifier = GlanceModifier,
     ) {
         val sleepIntent =
@@ -209,12 +242,13 @@ class StrainRecoveryWidget : GlanceAppWidget() {
             modifier =
                 modifier
                     .fillMaxHeight()
-                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                    .padding(horizontal = WidgetLayoutSpec.compactCellHorizontalPadding)
                     .clickable(actionStartActivity(sleepIntent)),
         ) {
             ColumnHeader(
                 iconResId = R.drawable.ic_widget_moon,
                 title = context.getString(R.string.widget_sleep_title),
+                stack = layout.stackHeader,
             )
 
             val sleepScoreText =
@@ -231,7 +265,7 @@ class StrainRecoveryWidget : GlanceAppWidget() {
             )
 
             Spacer(modifier = GlanceModifier.defaultWeight())
-            SleepDetails(context, snapshot, isCompact)
+            SleepDetails(context, snapshot, layout)
         }
     }
 
@@ -240,7 +274,7 @@ class StrainRecoveryWidget : GlanceAppWidget() {
     private fun SleepDetails(
         context: Context,
         snapshot: WidgetSnapshot,
-        isCompact: Boolean,
+        layout: WidgetLayoutSpec.Strain,
     ) {
         Text(
             text =
@@ -253,7 +287,7 @@ class StrainRecoveryWidget : GlanceAppWidget() {
                     fontWeight = FontWeight.Medium,
                 ),
         )
-        if (!isCompact && snapshot.deepSleepPercent != null && snapshot.remSleepPercent != null) {
+        if (layout.showSleepBreakdown && snapshot.deepSleepPercent != null && snapshot.remSleepPercent != null) {
             Text(
                 text =
                     context.getString(
@@ -275,6 +309,7 @@ class StrainRecoveryWidget : GlanceAppWidget() {
     private fun StrainColumn(
         context: Context,
         snapshot: WidgetSnapshot,
+        layout: WidgetLayoutSpec.Strain,
         modifier: GlanceModifier = GlanceModifier,
     ) {
         val workoutsIntent =
@@ -287,12 +322,13 @@ class StrainRecoveryWidget : GlanceAppWidget() {
             modifier =
                 modifier
                     .fillMaxHeight()
-                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                    .padding(horizontal = WidgetLayoutSpec.compactCellHorizontalPadding)
                     .clickable(actionStartActivity(workoutsIntent)),
         ) {
             ColumnHeader(
                 iconResId = R.drawable.ic_widget_bolt,
                 title = context.getString(R.string.widget_strain_title),
+                stack = layout.stackHeader,
             )
 
             val strainScoreText =
@@ -306,6 +342,7 @@ class StrainRecoveryWidget : GlanceAppWidget() {
                         fontSize = 34.sp,
                         fontWeight = FontWeight.Bold,
                     ),
+                maxLines = 1,
             )
 
             Spacer(modifier = GlanceModifier.defaultWeight())

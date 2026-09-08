@@ -21,6 +21,7 @@ import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.provideContent
 import androidx.glance.currentState
 import androidx.glance.layout.Alignment
+import androidx.glance.layout.Box
 import androidx.glance.layout.Column
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
@@ -28,6 +29,7 @@ import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.layout.size
+import androidx.glance.layout.width
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
@@ -72,25 +74,56 @@ class RecoveryGlanceWidget : GlanceAppWidget() {
     ) {
         val dashboardIntent = WidgetDeepLinkHandler.createTabIntent(context, WidgetDeepLinkHandler.TAB_DASHBOARD)
         val sleepIntent = WidgetDeepLinkHandler.createTabIntent(context, WidgetDeepLinkHandler.TAB_SLEEP)
-        val isCompact = LocalSize.current.height < 140.dp
+        val layout = WidgetLayoutSpec.recovery(LocalSize.current)
 
-        WidgetSurface(modifier = GlanceModifier.padding(12.dp)) {
-            Column(verticalAlignment = Alignment.Top) {
-                ReadinessSection(
+        WidgetSurface(
+            modifier =
+                GlanceModifier.padding(
+                    horizontal =
+                        if (layout.useCompactColumns) {
+                            WidgetLayoutSpec.compactStripHorizontalPadding
+                        } else {
+                            WidgetLayoutSpec.standardOuterHorizontalPadding
+                        },
+                    vertical =
+                        if (layout.useCompactColumns) {
+                            WidgetLayoutSpec.compactStripVerticalPadding
+                        } else {
+                            WidgetLayoutSpec.standardOuterVerticalPadding
+                        },
+                ),
+        ) {
+            if (layout.useCompactColumns) {
+                CompactRecoveryContent(
                     context = context,
                     snapshot = snapshot,
-                    isCompact = isCompact,
-                    onClick = actionStartActivity(dashboardIntent),
+                    dashboardIntent = dashboardIntent,
+                    sleepIntent = sleepIntent,
                 )
+            } else {
+                Column(
+                    modifier = GlanceModifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    ReadinessSection(
+                        context = context,
+                        snapshot = snapshot,
+                        layout = layout,
+                        onClick = actionStartActivity(dashboardIntent),
+                    )
 
-                SubtleDivider(isVertical = false, modifier = GlanceModifier.padding(vertical = 8.dp))
+                    SubtleDivider(
+                        isVertical = false,
+                        modifier = GlanceModifier.padding(vertical = WidgetLayoutSpec.sectionSpacing),
+                    )
 
-                SleepSection(
-                    context = context,
-                    snapshot = snapshot,
-                    isCompact = isCompact,
-                    onClick = actionStartActivity(sleepIntent),
-                )
+                    SleepSection(
+                        context = context,
+                        snapshot = snapshot,
+                        layout = layout,
+                        onClick = actionStartActivity(sleepIntent),
+                    )
+                }
             }
         }
     }
@@ -100,13 +133,13 @@ class RecoveryGlanceWidget : GlanceAppWidget() {
     private fun ReadinessSection(
         context: Context,
         snapshot: WidgetSnapshot,
-        isCompact: Boolean,
+        layout: WidgetLayoutSpec.Recovery,
         onClick: Action,
     ) {
         Column(
             modifier = GlanceModifier.fillMaxWidth().clickable(onClick),
         ) {
-            ReadinessHeaderRow(context, snapshot)
+            ReadinessHeaderRow(context, snapshot, layout)
 
             Spacer(modifier = GlanceModifier.height(4.dp))
 
@@ -121,10 +154,11 @@ class RecoveryGlanceWidget : GlanceAppWidget() {
                         fontSize = 36.sp,
                         fontWeight = FontWeight.Bold,
                     ),
+                maxLines = 1,
             )
 
             val secondaryRecoveryMetric =
-                if (!isCompact) {
+                if (layout.showHrvSupport) {
                     WidgetDeltaFormatter.formatSecondaryRecoveryMetric(context, snapshot)
                 } else {
                     null
@@ -137,6 +171,7 @@ class RecoveryGlanceWidget : GlanceAppWidget() {
                             color = GlanceTheme.colors.onSurfaceVariant,
                             fontSize = 11.sp,
                         ),
+                    maxLines = 1,
                 )
             }
         }
@@ -147,29 +182,62 @@ class RecoveryGlanceWidget : GlanceAppWidget() {
     private fun ReadinessHeaderRow(
         context: Context,
         snapshot: WidgetSnapshot,
+        layout: WidgetLayoutSpec.Recovery,
     ) {
-        Row(
-            modifier = GlanceModifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconBadge(
-                iconResId = R.drawable.ic_widget_sparkle,
-                contentDescription = context.getString(R.string.widget_readiness_title),
-                size = 24.dp,
-                iconSize = 14.dp,
-            )
+        if (layout.reflowStatusChip) {
+            Column(modifier = GlanceModifier.fillMaxWidth()) {
+                RecoveryHeaderContent(
+                    iconResId = R.drawable.ic_widget_sparkle,
+                    title = context.getString(R.string.widget_readiness_title),
+                )
+                Spacer(modifier = GlanceModifier.height(2.dp))
+                ReadinessStatusBadge(
+                    context = context,
+                    snapshot = snapshot,
+                    modifier =
+                        GlanceModifier.padding(
+                            start =
+                                WidgetLayoutSpec.iconBadgeSize + WidgetLayoutSpec.iconToLabelSpacing,
+                        ),
+                    compact = true,
+                )
+            }
+        } else {
+            Row(
+                modifier = GlanceModifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RecoveryHeaderContent(
+                    iconResId = R.drawable.ic_widget_sparkle,
+                    title = context.getString(R.string.widget_readiness_title),
+                )
+                Spacer(modifier = GlanceModifier.defaultWeight())
+                if (layout.showStatusChip) {
+                    ReadinessStatusBadge(context, snapshot)
+                }
+            }
+        }
+    }
+
+    @Composable
+    @GlanceComposable
+    private fun RecoveryHeaderContent(
+        iconResId: Int,
+        title: String,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconBadge(iconResId = iconResId, contentDescription = title)
             Text(
-                text = context.getString(R.string.widget_readiness_title),
+                text = title,
                 style =
                     TextStyle(
                         color = GlanceTheme.colors.onSurfaceVariant,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                     ),
-                modifier = GlanceModifier.padding(start = 6.dp),
+                modifier = GlanceModifier.padding(start = WidgetLayoutSpec.iconToLabelSpacing),
+                maxLines = 1,
             )
-            Spacer(modifier = GlanceModifier.defaultWeight())
-            ReadinessStatusBadge(context, snapshot)
         }
     }
 
@@ -178,7 +246,7 @@ class RecoveryGlanceWidget : GlanceAppWidget() {
     private fun SleepSection(
         context: Context,
         snapshot: WidgetSnapshot,
-        isCompact: Boolean,
+        layout: WidgetLayoutSpec.Recovery,
         onClick: Action,
     ) {
         Column(
@@ -188,7 +256,7 @@ class RecoveryGlanceWidget : GlanceAppWidget() {
 
             Spacer(modifier = GlanceModifier.height(4.dp))
 
-            SleepMetricsRow(context, snapshot, isCompact)
+            SleepMetricsRow(context, snapshot, layout)
         }
     }
 
@@ -202,8 +270,6 @@ class RecoveryGlanceWidget : GlanceAppWidget() {
             IconBadge(
                 iconResId = R.drawable.ic_widget_moon,
                 contentDescription = context.getString(R.string.widget_sleep_title),
-                size = 24.dp,
-                iconSize = 14.dp,
             )
             Text(
                 text = context.getString(R.string.widget_sleep_title),
@@ -213,7 +279,8 @@ class RecoveryGlanceWidget : GlanceAppWidget() {
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                     ),
-                modifier = GlanceModifier.padding(start = 6.dp),
+                modifier = GlanceModifier.padding(start = WidgetLayoutSpec.iconToLabelSpacing),
+                maxLines = 1,
             )
             Spacer(modifier = GlanceModifier.defaultWeight())
             Image(
@@ -230,7 +297,7 @@ class RecoveryGlanceWidget : GlanceAppWidget() {
     private fun SleepMetricsRow(
         context: Context,
         snapshot: WidgetSnapshot,
-        isCompact: Boolean,
+        layout: WidgetLayoutSpec.Recovery,
     ) {
         Row(
             modifier = GlanceModifier.fillMaxWidth(),
@@ -239,20 +306,29 @@ class RecoveryGlanceWidget : GlanceAppWidget() {
             val sleepScoreText =
                 snapshot.sleepScore?.toString()
                     ?: context.getString(R.string.widget_placeholder_value)
-            Text(
-                text = sleepScoreText,
-                style =
-                    TextStyle(
-                        color = GlanceTheme.colors.onSurface,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold,
-                    ),
-            )
+            Box(
+                modifier = GlanceModifier.width(WidgetLayoutSpec.metricScoreColumnWidth),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Text(
+                    text = sleepScoreText,
+                    style =
+                        TextStyle(
+                            color = GlanceTheme.colors.onSurface,
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                    maxLines = 1,
+                )
+            }
 
+            Spacer(modifier = GlanceModifier.width(WidgetLayoutSpec.metricDividerGap))
             SubtleDivider(
                 isVertical = true,
-                modifier = GlanceModifier.height(28.dp).padding(horizontal = 8.dp),
+                modifier = GlanceModifier.height(WidgetLayoutSpec.metricDividerHeight),
+                verticalInset = 0.dp,
             )
+            Spacer(modifier = GlanceModifier.width(WidgetLayoutSpec.metricDividerGap))
 
             Column {
                 Text(
@@ -265,8 +341,9 @@ class RecoveryGlanceWidget : GlanceAppWidget() {
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Medium,
                         ),
+                    maxLines = 1,
                 )
-                if (!isCompact) {
+                if (layout.showTotalSleep) {
                     Text(
                         text = context.getString(R.string.widget_total_sleep_title),
                         style =
@@ -274,6 +351,7 @@ class RecoveryGlanceWidget : GlanceAppWidget() {
                                 color = GlanceTheme.colors.onSurfaceVariant,
                                 fontSize = 10.sp,
                             ),
+                        maxLines = 1,
                     )
                 }
             }
@@ -285,15 +363,19 @@ class RecoveryGlanceWidget : GlanceAppWidget() {
     private fun ReadinessStatusBadge(
         context: Context,
         snapshot: WidgetSnapshot,
+        modifier: GlanceModifier = GlanceModifier,
+        compact: Boolean = false,
     ) {
         when {
             snapshot.isCalibrating ->
                 StatusPill(
                     text = context.getString(R.string.widget_calibrating_format, snapshot.calibrationDays),
+                    modifier = modifier,
+                    compact = compact,
                 )
             snapshot.readinessCategory != null -> {
                 ReadinessStatusFormatter.format(context, snapshot.readinessCategory)?.let { categoryLabel ->
-                    StatusPill(text = categoryLabel)
+                    StatusPill(text = categoryLabel, modifier = modifier, compact = compact)
                 }
             }
         }

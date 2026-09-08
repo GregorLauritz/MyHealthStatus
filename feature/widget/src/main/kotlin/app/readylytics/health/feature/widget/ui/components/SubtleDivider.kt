@@ -10,25 +10,29 @@ import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxHeight
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
+import androidx.glance.layout.padding
 import androidx.glance.layout.width
+import app.readylytics.health.feature.widget.ui.WidgetLayoutSpec
 
 @Composable
 @GlanceComposable
 fun SubtleDivider(
     modifier: GlanceModifier = GlanceModifier,
     isVertical: Boolean = true,
+    verticalInset: androidx.compose.ui.unit.Dp = if (isVertical) WidgetLayoutSpec.dividerInset else 0.dp,
 ) {
     Spacer(
         modifier =
             if (isVertical) {
                 GlanceModifier
-                    .width(1.dp)
+                    .width(WidgetLayoutSpec.dividerThickness)
                     .fillMaxHeight()
+                    .padding(vertical = verticalInset)
                     .then(modifier)
                     .background(GlanceTheme.colors.outline)
             } else {
                 GlanceModifier
-                    .height(1.dp)
+                    .height(WidgetLayoutSpec.dividerThickness)
                     .fillMaxWidth()
                     .then(modifier)
                     .background(GlanceTheme.colors.outline)
