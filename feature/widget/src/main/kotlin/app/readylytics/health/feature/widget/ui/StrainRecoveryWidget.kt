@@ -1,28 +1,32 @@
 package app.readylytics.health.feature.widget.ui
 
 import android.content.Context
+import androidx.annotation.DrawableRes
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.glance.ColorFilter
 import androidx.glance.GlanceComposable
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
+import androidx.glance.Image
+import androidx.glance.ImageProvider
+import androidx.glance.LocalSize
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.actionStartActivity
-import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
-import androidx.glance.background
 import androidx.glance.currentState
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Column
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxHeight
-import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.padding
-import androidx.glance.layout.width
+import androidx.glance.layout.size
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
@@ -30,14 +34,23 @@ import app.readylytics.health.feature.widget.R
 import app.readylytics.health.feature.widget.data.WidgetSnapshot
 import app.readylytics.health.feature.widget.data.WidgetSnapshotDefinition
 import app.readylytics.health.feature.widget.navigation.WidgetDeepLinkHandler
-import app.readylytics.health.feature.widget.ui.components.StatusChip
+import app.readylytics.health.feature.widget.ui.components.IconBadge
+import app.readylytics.health.feature.widget.ui.components.StatusPill
+import app.readylytics.health.feature.widget.ui.components.SubtleDivider
+import app.readylytics.health.feature.widget.ui.components.WidgetSurface
 import app.readylytics.health.feature.widget.ui.theme.WidgetGlanceTheme
-import app.readylytics.health.feature.widget.ui.theme.surfaceContainer
-import app.readylytics.health.feature.widget.ui.theme.surfaceContainerLow
 import java.util.Locale
 
 class StrainRecoveryWidget : GlanceAppWidget() {
     override val stateDefinition = WidgetSnapshotDefinition
+
+    override val sizeMode =
+        SizeMode.Responsive(
+            setOf(
+                DpSize(250.dp, 110.dp), // Compact
+                DpSize(280.dp, 120.dp), // Standard
+            ),
+        )
 
     override suspend fun provideGlance(
         context: Context,
@@ -57,35 +70,61 @@ class StrainRecoveryWidget : GlanceAppWidget() {
         context: Context,
         snapshot: WidgetSnapshot,
     ) {
-        Row(
-            modifier =
-                GlanceModifier
-                    .fillMaxSize()
-                    .background(GlanceTheme.colors.surfaceContainerLow)
-                    .cornerRadius(16.dp)
-                    .padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            ReadinessColumn(
-                context = context,
-                snapshot = snapshot,
-                modifier = GlanceModifier.defaultWeight(),
+        val isCompact = LocalSize.current.height < 120.dp
+
+        WidgetSurface(modifier = GlanceModifier.padding(10.dp)) {
+            Row(
+                modifier = GlanceModifier.fillMaxHeight(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ReadinessColumn(
+                    context = context,
+                    snapshot = snapshot,
+                    modifier = GlanceModifier.defaultWeight(),
+                )
+
+                SubtleDivider(isVertical = true, modifier = GlanceModifier.padding(vertical = 4.dp))
+
+                SleepColumn(
+                    context = context,
+                    snapshot = snapshot,
+                    isCompact = isCompact,
+                    modifier = GlanceModifier.defaultWeight(),
+                )
+
+                SubtleDivider(isVertical = true, modifier = GlanceModifier.padding(vertical = 4.dp))
+
+                StrainColumn(
+                    context = context,
+                    snapshot = snapshot,
+                    modifier = GlanceModifier.defaultWeight(),
+                )
+            }
+        }
+    }
+
+    @Composable
+    @GlanceComposable
+    private fun ColumnHeader(
+        @DrawableRes iconResId: Int,
+        title: String,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconBadge(
+                iconResId = iconResId,
+                contentDescription = title,
+                size = 24.dp,
+                iconSize = 14.dp,
             )
-
-            Spacer(modifier = GlanceModifier.width(6.dp))
-
-            SleepColumn(
-                context = context,
-                snapshot = snapshot,
-                modifier = GlanceModifier.defaultWeight(),
-            )
-
-            Spacer(modifier = GlanceModifier.width(6.dp))
-
-            StrainColumn(
-                context = context,
-                snapshot = snapshot,
-                modifier = GlanceModifier.defaultWeight(),
+            Text(
+                text = title,
+                style =
+                    TextStyle(
+                        color = GlanceTheme.colors.onSurfaceVariant,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                    ),
+                modifier = GlanceModifier.padding(start = 4.dp),
             )
         }
     }
@@ -107,20 +146,14 @@ class StrainRecoveryWidget : GlanceAppWidget() {
             modifier =
                 modifier
                     .fillMaxHeight()
-                    .background(GlanceTheme.colors.surfaceContainer)
-                    .cornerRadius(12.dp)
-                    .padding(8.dp)
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
                     .clickable(actionStartActivity(dashboardIntent)),
         ) {
-            Text(
-                text = context.getString(R.string.widget_readiness_title),
-                style =
-                    TextStyle(
-                        color = GlanceTheme.colors.onSurfaceVariant,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                    ),
+            ColumnHeader(
+                iconResId = R.drawable.ic_widget_sparkle,
+                title = context.getString(R.string.widget_readiness_title),
             )
+
             val readinessScoreText =
                 snapshot.readinessScore?.toString()
                     ?: context.getString(R.string.widget_placeholder_value)
@@ -129,10 +162,11 @@ class StrainRecoveryWidget : GlanceAppWidget() {
                 style =
                     TextStyle(
                         color = GlanceTheme.colors.primary,
-                        fontSize = 28.sp,
+                        fontSize = 34.sp,
                         fontWeight = FontWeight.Bold,
                     ),
             )
+
             Spacer(modifier = GlanceModifier.defaultWeight())
             ReadinessStatus(context, snapshot)
         }
@@ -146,16 +180,12 @@ class StrainRecoveryWidget : GlanceAppWidget() {
     ) {
         when {
             snapshot.isCalibrating ->
-                StatusChip(
-                    text =
-                        context.getString(
-                            R.string.widget_calibrating_format,
-                            snapshot.calibrationDays,
-                        ),
+                StatusPill(
+                    text = context.getString(R.string.widget_calibrating_format, snapshot.calibrationDays),
                 )
             snapshot.readinessCategory != null -> {
                 ReadinessStatusFormatter.format(context, snapshot.readinessCategory)?.let { categoryLabel ->
-                    StatusChip(text = categoryLabel)
+                    StatusPill(text = categoryLabel)
                 }
             }
         }
@@ -166,6 +196,7 @@ class StrainRecoveryWidget : GlanceAppWidget() {
     private fun SleepColumn(
         context: Context,
         snapshot: WidgetSnapshot,
+        isCompact: Boolean,
         modifier: GlanceModifier = GlanceModifier,
     ) {
         val sleepIntent =
@@ -178,20 +209,14 @@ class StrainRecoveryWidget : GlanceAppWidget() {
             modifier =
                 modifier
                     .fillMaxHeight()
-                    .background(GlanceTheme.colors.surfaceContainer)
-                    .cornerRadius(12.dp)
-                    .padding(8.dp)
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
                     .clickable(actionStartActivity(sleepIntent)),
         ) {
-            Text(
-                text = context.getString(R.string.widget_sleep_title),
-                style =
-                    TextStyle(
-                        color = GlanceTheme.colors.onSurfaceVariant,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                    ),
+            ColumnHeader(
+                iconResId = R.drawable.ic_widget_moon,
+                title = context.getString(R.string.widget_sleep_title),
             )
+
             val sleepScoreText =
                 snapshot.sleepScore?.toString()
                     ?: context.getString(R.string.widget_placeholder_value)
@@ -200,12 +225,13 @@ class StrainRecoveryWidget : GlanceAppWidget() {
                 style =
                     TextStyle(
                         color = GlanceTheme.colors.onSurface,
-                        fontSize = 28.sp,
+                        fontSize = 34.sp,
                         fontWeight = FontWeight.Bold,
                     ),
             )
+
             Spacer(modifier = GlanceModifier.defaultWeight())
-            SleepDetails(context, snapshot)
+            SleepDetails(context, snapshot, isCompact)
         }
     }
 
@@ -214,6 +240,7 @@ class StrainRecoveryWidget : GlanceAppWidget() {
     private fun SleepDetails(
         context: Context,
         snapshot: WidgetSnapshot,
+        isCompact: Boolean,
     ) {
         Text(
             text =
@@ -221,11 +248,12 @@ class StrainRecoveryWidget : GlanceAppWidget() {
                     ?: context.getString(R.string.widget_awaiting_sync),
             style =
                 TextStyle(
-                    color = GlanceTheme.colors.onSurfaceVariant,
-                    fontSize = 12.sp,
+                    color = GlanceTheme.colors.onSurface,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
                 ),
         )
-        if (snapshot.deepSleepPercent != null && snapshot.remSleepPercent != null) {
+        if (!isCompact && snapshot.deepSleepPercent != null && snapshot.remSleepPercent != null) {
             Text(
                 text =
                     context.getString(
@@ -235,7 +263,7 @@ class StrainRecoveryWidget : GlanceAppWidget() {
                     ),
                 style =
                     TextStyle(
-                        color = GlanceTheme.colors.outline,
+                        color = GlanceTheme.colors.onSurfaceVariant,
                         fontSize = 10.sp,
                     ),
             )
@@ -259,20 +287,14 @@ class StrainRecoveryWidget : GlanceAppWidget() {
             modifier =
                 modifier
                     .fillMaxHeight()
-                    .background(GlanceTheme.colors.surfaceContainer)
-                    .cornerRadius(12.dp)
-                    .padding(8.dp)
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
                     .clickable(actionStartActivity(workoutsIntent)),
         ) {
-            Text(
-                text = context.getString(R.string.widget_strain_title),
-                style =
-                    TextStyle(
-                        color = GlanceTheme.colors.onSurfaceVariant,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                    ),
+            ColumnHeader(
+                iconResId = R.drawable.ic_widget_bolt,
+                title = context.getString(R.string.widget_strain_title),
             )
+
             val strainScoreText =
                 snapshot.strainScore?.let { String.format(Locale.US, "%.1f", it) }
                     ?: context.getString(R.string.widget_placeholder_value)
@@ -281,25 +303,44 @@ class StrainRecoveryWidget : GlanceAppWidget() {
                 style =
                     TextStyle(
                         color = GlanceTheme.colors.tertiary,
-                        fontSize = 28.sp,
+                        fontSize = 34.sp,
                         fontWeight = FontWeight.Bold,
                     ),
             )
+
             Spacer(modifier = GlanceModifier.defaultWeight())
             if (snapshot.stepCountFormatted != null) {
-                Text(
-                    text =
-                        context.getString(
-                            R.string.widget_steps_format,
-                            snapshot.stepCountFormatted,
-                        ),
-                    style =
-                        TextStyle(
-                            color = GlanceTheme.colors.onSurfaceVariant,
-                            fontSize = 12.sp,
-                        ),
-                )
+                StrainSteps(context, snapshot.stepCountFormatted)
             }
+        }
+    }
+
+    @Composable
+    @GlanceComposable
+    private fun StrainSteps(
+        context: Context,
+        stepCountFormatted: String,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Image(
+                provider = ImageProvider(R.drawable.ic_widget_steps),
+                contentDescription = null,
+                modifier = GlanceModifier.size(12.dp),
+                colorFilter = ColorFilter.tint(GlanceTheme.colors.onSurfaceVariant),
+            )
+            Spacer(modifier = GlanceModifier.size(4.dp))
+            Text(
+                text =
+                    context.getString(
+                        R.string.widget_steps_format,
+                        stepCountFormatted,
+                    ),
+                style =
+                    TextStyle(
+                        color = GlanceTheme.colors.onSurfaceVariant,
+                        fontSize = 12.sp,
+                    ),
+            )
         }
     }
 }
