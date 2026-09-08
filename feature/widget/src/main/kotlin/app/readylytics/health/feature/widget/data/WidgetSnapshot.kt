@@ -23,6 +23,7 @@ data class WidgetSnapshot(
     val hrvDeltaFormatted: String? = null,
     val avgSpo2Formatted: String? = null,
     val skinTempDeltaFormatted: String? = null,
+    val secondaryRecoveryMetricFormatted: String? = null,
 ) {
     companion object {
         val EMPTY = WidgetSnapshot()

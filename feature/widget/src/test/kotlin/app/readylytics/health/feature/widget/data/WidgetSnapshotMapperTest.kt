@@ -15,6 +15,22 @@ import kotlin.math.ln
 
 class WidgetSnapshotMapperTest {
     private val testDate = LocalDate.of(2026, 9, 7)
+    private val defaultPrefs = UserPreferences()
+
+    private fun createTestSummary(
+        restingHeartRate: Int? = null,
+        rhrBaseline: Int? = null,
+        nocturnalHrv: Int? = null,
+        hrvBaseline: Int? = null,
+    ): DailySummary =
+        DailySummary(
+            date = testDate,
+            restingHeartRate = restingHeartRate,
+            rhrBpm = rhrBaseline?.toFloat(),
+            baselineCalculatedAtDate = if (rhrBaseline != null) testDate else null,
+            nocturnalHrv = nocturnalHrv,
+            hrvBaseline = hrvBaseline,
+        )
 
     @Test
     fun nullSummary_returnsEmptySnapshot() {
@@ -112,8 +128,8 @@ class WidgetSnapshotMapperTest {
         assertEquals(19, workoutOnlySnapshot.deepSleepPercent)
         assertEquals(22, workoutOnlySnapshot.remSleepPercent)
         assertEquals(14.2f, workoutOnlySnapshot.strainScore)
-        assertEquals("-2", workoutOnlySnapshot.rhrDeltaFormatted)
-        assertEquals("+5", workoutOnlySnapshot.hrvDeltaFormatted)
+        assertEquals("↓ 2 vs baseline", workoutOnlySnapshot.rhrDeltaFormatted)
+        assertEquals("↑ 5", workoutOnlySnapshot.hrvDeltaFormatted)
         val expectedStepCount = NumberFormat.getIntegerInstance(Locale.getDefault()).format(10450)
         assertEquals(expectedStepCount, workoutOnlySnapshot.stepCountFormatted)
         assertEquals("97%", workoutOnlySnapshot.avgSpo2Formatted)
@@ -271,7 +287,7 @@ class WidgetSnapshotMapperTest {
                 prefs = UserPreferences(),
                 date = testDate,
             )
-        assertEquals("0", snapshot.rhrDeltaFormatted)
+        assertEquals("0 vs baseline", snapshot.rhrDeltaFormatted)
         assertEquals("0", snapshot.hrvDeltaFormatted)
     }
 
@@ -319,9 +335,66 @@ class WidgetSnapshotMapperTest {
             )
         assertEquals(82, snapshot.readinessScore)
         assertEquals("Maintain", snapshot.readinessCategory)
-        assertEquals("-1", snapshot.rhrDeltaFormatted)
-        assertEquals("+3", snapshot.hrvDeltaFormatted)
+        assertEquals("↓ 1 vs baseline", snapshot.rhrDeltaFormatted)
+        assertEquals("↑ 3", snapshot.hrvDeltaFormatted)
         assertEquals("99%", snapshot.avgSpo2Formatted)
         assertNull(snapshot.skinTempDeltaFormatted)
+    }
+
+    @Test
+    fun map_formatsDirectionalDeltaArrows() {
+        val summary =
+            createTestSummary(
+                restingHeartRate = 46,
+                rhrBaseline = 47,
+                nocturnalHrv = 45,
+                hrvBaseline = 42,
+            )
+        val snapshot = WidgetSnapshotMapper.map(summary, defaultPrefs, summary.date)
+
+        assertEquals("↓ 1 vs baseline", snapshot.rhrDeltaFormatted)
+        assertEquals("↑ 3", snapshot.hrvDeltaFormatted)
+    }
+
+    @Test
+    fun map_populatesSecondaryRecoveryMetricFormatted() {
+        val summary =
+            createTestSummary(
+                restingHeartRate = 46,
+                rhrBaseline = 47,
+                nocturnalHrv = 45,
+                hrvBaseline = 42,
+            )
+        val snapshot = WidgetSnapshotMapper.map(summary, defaultPrefs, summary.date)
+
+        assertEquals("HRV: 45 ms (↑ 3)", snapshot.secondaryRecoveryMetricFormatted)
+    }
+
+    @Test
+    fun map_secondaryRecoveryMetric_fallsBackToRhrWhenHrvNull() {
+        val summary =
+            createTestSummary(
+                restingHeartRate = 46,
+                rhrBaseline = 47,
+                nocturnalHrv = null,
+                hrvBaseline = null,
+            )
+        val snapshot = WidgetSnapshotMapper.map(summary, defaultPrefs, summary.date)
+
+        assertEquals("RHR: 46 bpm (↓ 1)", snapshot.secondaryRecoveryMetricFormatted)
+    }
+
+    @Test
+    fun map_secondaryRecoveryMetric_isNullWhenBothDeltasNull() {
+        val summary =
+            createTestSummary(
+                restingHeartRate = 46,
+                rhrBaseline = null,
+                nocturnalHrv = 45,
+                hrvBaseline = null,
+            )
+        val snapshot = WidgetSnapshotMapper.map(summary, defaultPrefs, summary.date)
+
+        assertNull(snapshot.secondaryRecoveryMetricFormatted)
     }
 }
