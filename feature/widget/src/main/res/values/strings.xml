@@ -1,13 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="widget_readiness_title">READINESS</string>
-    <string name="widget_sleep_title">SLEEP</string>
-    <string name="widget_strain_title">STRAIN</string>
-    <string name="widget_vitals_title">VITALS</string>
-    <string name="widget_steps_title">STEPS</string>
+    <string name="widget_readiness_title">Readiness</string>
+    <string name="widget_sleep_title">Sleep</string>
+    <string name="widget_strain_title">Strain</string>
+    <string name="widget_vitals_title">Vitals</string>
+    <string name="widget_steps_title">Steps</string>
     <string name="widget_rhr_title">RHR</string>
     <string name="widget_hrv_title">HRV</string>
-    <string name="widget_spo2_title">SpO2</string>
+    <string name="widget_spo2_title">SpO₂</string>
+
+    <string name="widget_total_sleep_title">Total sleep</string>
+    <string name="widget_delta_up_format">↑ %1$s</string>
+    <string name="widget_delta_down_format">↓ %1$s</string>
+    <string name="widget_delta_vs_baseline_format">%1$s vs baseline</string>
+    <string name="widget_secondary_hrv_format">HRV: %1$d ms (%2$s)</string>
+    <string name="widget_secondary_rhr_format">RHR: %1$d bpm (%2$s)</string>
 
     <string name="widget_calibrating_format">Calibrating (%1$d/7)</string>
     <string name="widget_placeholder_value">--</string>
