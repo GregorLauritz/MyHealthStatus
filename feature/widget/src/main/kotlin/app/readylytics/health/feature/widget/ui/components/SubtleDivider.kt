@@ -24,14 +24,14 @@ fun SubtleDivider(
                 GlanceModifier
                     .width(1.dp)
                     .fillMaxHeight()
-                    .background(GlanceTheme.colors.outline)
                     .then(modifier)
+                    .background(GlanceTheme.colors.outline)
             } else {
                 GlanceModifier
                     .height(1.dp)
                     .fillMaxWidth()
-                    .background(GlanceTheme.colors.outline)
                     .then(modifier)
+                    .background(GlanceTheme.colors.outline)
             },
     )
 }

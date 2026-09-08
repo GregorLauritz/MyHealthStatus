@@ -110,7 +110,7 @@ class VitalsStripWidget : GlanceAppWidget() {
                 value =
                     snapshot.restingHeartRate?.let { context.getString(R.string.widget_bpm_format, it) }
                         ?: context.getString(R.string.widget_placeholder_value),
-                delta = if (!isCompact) snapshot.rhrDeltaFormatted else null,
+                delta = if (!isCompact) WidgetDeltaFormatter.formatRhrDelta(context, snapshot) else null,
                 onClick = vitalsAction,
                 modifier = GlanceModifier.defaultWeight(),
             )
@@ -124,7 +124,7 @@ class VitalsStripWidget : GlanceAppWidget() {
                 value =
                     snapshot.nocturnalHrv?.let { context.getString(R.string.widget_ms_format, it) }
                         ?: context.getString(R.string.widget_placeholder_value),
-                delta = if (!isCompact) snapshot.hrvDeltaFormatted else null,
+                delta = if (!isCompact) WidgetDeltaFormatter.formatHrvDelta(context, snapshot) else null,
                 onClick = vitalsAction,
                 modifier = GlanceModifier.defaultWeight(),
             )

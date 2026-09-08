@@ -7,7 +7,6 @@ import app.readylytics.health.core.model.domain.scoring.LoadSourceMode
 import java.text.NumberFormat
 import java.time.LocalDate
 import java.util.Locale
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
 object WidgetSnapshotMapper {
@@ -35,32 +34,10 @@ object WidgetSnapshotMapper {
         val strainScore = resolveStrainScore(summary, prefs)
 
         val rhrBaseline = DailyMetricsMapper.rhrBaselineRounded(summary, prefs)
-        val rhrDeltaFormatted =
-            computeDeltaString(
-                current = summary.restingHeartRate,
-                baseline = rhrBaseline,
-                includeVsBaseline = true,
-            )
+        val rhrDelta = computeDelta(summary.restingHeartRate, rhrBaseline)
 
         val hrvBaseline = DailyMetricsMapper.hrvBaselineRounded(summary, prefs)
-        val hrvDeltaFormatted =
-            computeDeltaString(
-                current = summary.nocturnalHrv,
-                baseline = hrvBaseline,
-            )
-
-        val secondaryRecoveryMetricFormatted =
-            when {
-                summary.nocturnalHrv != null && hrvDeltaFormatted != null ->
-                    "HRV: ${summary.nocturnalHrv} ms ($hrvDeltaFormatted)"
-                summary.restingHeartRate != null && rhrDeltaFormatted != null ->
-                    "RHR: ${summary.restingHeartRate} bpm (${computeDeltaString(
-                        summary.restingHeartRate,
-                        rhrBaseline,
-                        false,
-                    )})"
-                else -> null
-            }
+        val hrvDelta = computeDelta(summary.nocturnalHrv, hrvBaseline)
 
         return WidgetSnapshot(
             lastUpdatedEpochMs = System.currentTimeMillis(),
@@ -77,12 +54,11 @@ object WidgetSnapshotMapper {
             strainTargetFormatted = DEFAULT_STRAIN_TARGET,
             stepCountFormatted = summary.stepCount?.let { numberFormat.format(it) },
             restingHeartRate = summary.restingHeartRate,
-            rhrDeltaFormatted = rhrDeltaFormatted,
+            rhrDelta = rhrDelta,
             nocturnalHrv = summary.nocturnalHrv,
-            hrvDeltaFormatted = hrvDeltaFormatted,
+            hrvDelta = hrvDelta,
             avgSpo2Formatted = summary.avgSleepingSpo2?.let { "${it.roundToInt()}%" },
             skinTempDeltaFormatted = null,
-            secondaryRecoveryMetricFormatted = secondaryRecoveryMetricFormatted,
         )
     }
 
@@ -130,19 +106,11 @@ object WidgetSnapshotMapper {
             LoadSourceMode.EVERYDAY_HEART_RATE -> summary.trimpEverydayHr ?: summary.trimpWorkoutOnly
         }
 
-    private fun computeDeltaString(
+    private fun computeDelta(
         current: Int?,
         baseline: Int?,
-        includeVsBaseline: Boolean = false,
-    ): String? {
+    ): Int? {
         if (current == null || baseline == null) return null
-        val diff = current - baseline
-        val arrowText =
-            when {
-                diff > 0 -> "↑ $diff"
-                diff < 0 -> "↓ ${abs(diff)}"
-                else -> "0"
-            }
-        return if (includeVsBaseline) "$arrowText vs baseline" else arrowText
+        return current - baseline
     }
 }

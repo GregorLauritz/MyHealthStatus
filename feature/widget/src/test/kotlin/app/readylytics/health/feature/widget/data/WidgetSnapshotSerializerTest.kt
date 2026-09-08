@@ -3,6 +3,7 @@ package app.readylytics.health.feature.widget.data
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
@@ -35,8 +36,10 @@ class WidgetSnapshotSerializerTest {
                     strainTargetFormatted = "10 - 14",
                     stepCountFormatted = "8,420",
                     restingHeartRate = 54,
+                    rhrDelta = -2,
                     rhrDeltaFormatted = "-2 vs base",
                     nocturnalHrv = 68,
+                    hrvDelta = 5,
                     hrvDeltaFormatted = "+5 vs base",
                     avgSpo2Formatted = "97%",
                     skinTempDeltaFormatted = "+0.2°C",
@@ -51,7 +54,33 @@ class WidgetSnapshotSerializerTest {
             assertEquals(snapshot, restored)
             assertTrue(restored.hasData)
             assertEquals(84, restored.readinessScore)
+            assertEquals(-2, restored.rhrDelta)
+            assertEquals(5, restored.hrvDelta)
             assertEquals("7h 42m", restored.sleepDurationFormatted)
+        }
+
+    @Test
+    fun legacyPayloadWithoutRawDeltas_deserializesWithNullDeltas() =
+        runTest {
+            val legacyJson =
+                """
+                {
+                    "lastUpdatedEpochMs": 1757239200000,
+                    "hasData": true,
+                    "readinessScore": 84,
+                    "rhrDeltaFormatted": "-2 vs base",
+                    "hrvDeltaFormatted": "+5 vs base"
+                }
+                """.trimIndent()
+            val input = ByteArrayInputStream(legacyJson.toByteArray())
+            val restored = WidgetSnapshotSerializer.readFrom(input)
+
+            assertTrue(restored.hasData)
+            assertEquals(84, restored.readinessScore)
+            assertEquals("-2 vs base", restored.rhrDeltaFormatted)
+            assertEquals("+5 vs base", restored.hrvDeltaFormatted)
+            assertNull(restored.rhrDelta)
+            assertNull(restored.hrvDelta)
         }
 
     @Test

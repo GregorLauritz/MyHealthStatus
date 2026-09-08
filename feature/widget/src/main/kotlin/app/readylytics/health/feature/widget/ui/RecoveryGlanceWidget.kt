@@ -123,9 +123,15 @@ class RecoveryGlanceWidget : GlanceAppWidget() {
                     ),
             )
 
-            if (!isCompact && snapshot.secondaryRecoveryMetricFormatted != null) {
+            val secondaryRecoveryMetric =
+                if (!isCompact) {
+                    WidgetDeltaFormatter.formatSecondaryRecoveryMetric(context, snapshot)
+                } else {
+                    null
+                }
+            if (secondaryRecoveryMetric != null) {
                 Text(
-                    text = snapshot.secondaryRecoveryMetricFormatted,
+                    text = secondaryRecoveryMetric,
                     style =
                         TextStyle(
                             color = GlanceTheme.colors.onSurfaceVariant,

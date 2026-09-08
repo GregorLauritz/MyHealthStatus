@@ -18,11 +18,16 @@ data class WidgetSnapshot(
     val strainTargetFormatted: String? = null,
     val stepCountFormatted: String? = null,
     val restingHeartRate: Int? = null,
+    val rhrDelta: Int? = null,
+    @Deprecated("Use rhrDelta with WidgetDeltaFormatter for i18n support")
     val rhrDeltaFormatted: String? = null,
     val nocturnalHrv: Int? = null,
+    val hrvDelta: Int? = null,
+    @Deprecated("Use hrvDelta with WidgetDeltaFormatter for i18n support")
     val hrvDeltaFormatted: String? = null,
     val avgSpo2Formatted: String? = null,
     val skinTempDeltaFormatted: String? = null,
+    @Deprecated("Use WidgetDeltaFormatter.formatSecondaryRecoveryMetric for i18n support")
     val secondaryRecoveryMetricFormatted: String? = null,
 ) {
     companion object {
