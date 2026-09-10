@@ -43,25 +43,26 @@ internal fun PointerInputScope.resolveTappedSleepHrvSample(
     sortedSamples: List<HrvRecordData>,
 ): HrvRecordData? {
     val bottomLabelHeightPx = SLEEP_HRV_BOTTOM_LABEL_HEIGHT.toPx()
-    val plotRect = Rect(leftLabelWidthPx, 0f, size.width.toFloat(), size.height.toFloat() - bottomLabelHeightPx)
+    val topLabelPaddingPx = SLEEP_HRV_TOP_LABEL_PADDING.toPx()
+    val plotRect =
+        Rect(leftLabelWidthPx, topLabelPaddingPx, size.width.toFloat(), size.height.toFloat() - bottomLabelHeightPx)
     return findTappedSleepHrvSample(tapOffset, tappedUnscaledX, plotRect, plotW, sessionStartMs, scale, sortedSamples)
 }
 
 internal fun computeSleepHrvTooltip(
     selectedSample: HrvRecordData?,
-    yMin: Int,
-    yMax: Int,
+    yRange: IntRange,
     zoomedX: (Long) -> Float,
+    plotTop: Float,
     plotBottom: Float,
     timeFormatter: DateTimeFormatter,
     msTemplate: String,
 ): DataPointTooltipData? {
     val sample = selectedSample ?: return null
-    val plotTop = 0f
     val plotH = plotBottom - plotTop
 
     val sampleX = zoomedX(sample.timestampMs)
-    val sampleY = plotTop + (1f - (sample.rmssdMs - yMin) / (yMax - yMin).toFloat()) * plotH
+    val sampleY = plotTop + (1f - (sample.rmssdMs - yRange.first) / (yRange.last - yRange.first).toFloat()) * plotH
     val timeStr = timeFormatter.format(Instant.ofEpochMilli(sample.timestampMs))
 
     return DataPointTooltipData(
