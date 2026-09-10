@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.readylytics.health.core.designsystem.LocalStatusColors
 import app.readylytics.health.core.designsystem.spacing
@@ -153,7 +154,14 @@ private fun WeeklyStatCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Text(text = delta.text, style = MaterialTheme.typography.labelMedium, color = delta.color)
+            Text(
+                text = delta.text,
+                style = MaterialTheme.typography.labelMedium,
+                color = delta.color,
+                minLines = 2,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
