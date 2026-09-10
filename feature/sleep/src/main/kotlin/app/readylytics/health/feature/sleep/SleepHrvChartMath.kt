@@ -43,7 +43,9 @@ internal fun PointerInputScope.resolveTappedSleepHrvSample(
     sortedSamples: List<HrvRecordData>,
 ): HrvRecordData? {
     val bottomLabelHeightPx = SLEEP_HRV_BOTTOM_LABEL_HEIGHT.toPx()
-    val plotRect = Rect(leftLabelWidthPx, 0f, size.width.toFloat(), size.height.toFloat() - bottomLabelHeightPx)
+    val topLabelPaddingPx = SLEEP_HRV_TOP_LABEL_PADDING.toPx()
+    val plotRect =
+        Rect(leftLabelWidthPx, topLabelPaddingPx, size.width.toFloat(), size.height.toFloat() - bottomLabelHeightPx)
     return findTappedSleepHrvSample(tapOffset, tappedUnscaledX, plotRect, plotW, sessionStartMs, scale, sortedSamples)
 }
 
@@ -52,12 +54,12 @@ internal fun computeSleepHrvTooltip(
     yMin: Int,
     yMax: Int,
     zoomedX: (Long) -> Float,
+    plotTop: Float,
     plotBottom: Float,
     timeFormatter: DateTimeFormatter,
     msTemplate: String,
 ): DataPointTooltipData? {
     val sample = selectedSample ?: return null
-    val plotTop = 0f
     val plotH = plotBottom - plotTop
 
     val sampleX = zoomedX(sample.timestampMs)

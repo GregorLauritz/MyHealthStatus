@@ -42,10 +42,12 @@ import app.readylytics.health.core.ui.R as CoreUiR
 // readings routinely exceed HR's 10-minute threshold. 2 hours keeps a normal night's readings on
 // one connected line while still breaking on a genuine multi-hour sensor dropout.
 internal const val SLEEP_HRV_GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000L
-internal const val SLEEP_HRV_Y_TICK_COUNT = 4
+internal const val SLEEP_HRV_Y_TICK_COUNT = 2
 internal val SLEEP_HRV_LEFT_LABEL_WIDTH = 44.dp
 internal val SLEEP_HRV_BOTTOM_LABEL_HEIGHT = 20.dp
+internal val SLEEP_HRV_TOP_LABEL_PADDING = 10.dp
 internal val SLEEP_HRV_CHART_HEIGHT = 220.dp
+internal val SLEEP_HRV_X_LABEL_SPACING = 8.dp
 
 internal object SleepHrvChartHelper {
     fun splitIntoSegments(
@@ -125,6 +127,7 @@ private fun SleepHrvChartCanvasArea(
 
             val msTemplate = stringResource(R.string.sleep_hrv_tooltip_value)
             val bottomLabelHeightPx = with(density) { SLEEP_HRV_BOTTOM_LABEL_HEIGHT.toPx() }
+            val topLabelPaddingPx = with(density) { SLEEP_HRV_TOP_LABEL_PADDING.toPx() }
             val canvasHeightPx = with(density) { SLEEP_HRV_CHART_HEIGHT.toPx() }
 
             val tooltipState =
@@ -137,12 +140,14 @@ private fun SleepHrvChartCanvasArea(
                     state.data.yMin,
                     state.data.yMax,
                     msTemplate,
+                    topLabelPaddingPx,
                 ) {
                     computeSleepHrvTooltip(
                         selectedSample = state.interaction.selectedSample.value,
                         yMin = state.data.yMin,
                         yMax = state.data.yMax,
                         zoomedX = ::zoomedX,
+                        plotTop = topLabelPaddingPx,
                         plotBottom = canvasHeightPx - bottomLabelHeightPx,
                         timeFormatter = state.style.timeFormatter,
                         msTemplate = msTemplate,

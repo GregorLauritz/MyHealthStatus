@@ -54,10 +54,12 @@ import app.readylytics.health.core.ui.R as CoreUiR
 
 internal const val SLEEP_HR_GAP_THRESHOLD_MS = 10 * 60 * 1000L // 10 minutes
 internal const val SLEEP_HR_TREND_WINDOW_MS = 15 * 60 * 1000L // 15-minute centered rolling average
-internal const val SLEEP_HR_Y_TICK_COUNT = 4
+internal const val SLEEP_HR_Y_TICK_COUNT = 2
 internal val SLEEP_HR_LEFT_LABEL_WIDTH = 44.dp
 internal val SLEEP_HR_BOTTOM_LABEL_HEIGHT = 20.dp
+internal val SLEEP_HR_TOP_LABEL_PADDING = 10.dp
 internal val SLEEP_HR_CHART_HEIGHT = 220.dp
+internal val SLEEP_HR_X_LABEL_SPACING = 8.dp
 
 /** A point on the smoothed HR trend line: a rolling average, not a raw sensor sample. */
 internal data class SleepHrTrendPoint(
@@ -175,6 +177,7 @@ private fun SleepHrChartCanvasArea(
 
             val bpmTemplate = stringResource(R.string.sleep_hr_tooltip_value)
             val bottomLabelHeightPx = with(density) { SLEEP_HR_BOTTOM_LABEL_HEIGHT.toPx() }
+            val topLabelPaddingPx = with(density) { SLEEP_HR_TOP_LABEL_PADDING.toPx() }
             val canvasHeightPx = with(density) { SLEEP_HR_CHART_HEIGHT.toPx() }
 
             val tooltipState =
@@ -187,12 +190,14 @@ private fun SleepHrChartCanvasArea(
                     state.data.yMin,
                     state.data.yMax,
                     bpmTemplate,
+                    topLabelPaddingPx,
                 ) {
                     computeSleepHrTooltip(
                         selectedSample = state.interaction.selectedSample.value,
                         yMin = state.data.yMin,
                         yMax = state.data.yMax,
                         zoomedX = ::zoomedX,
+                        plotTop = topLabelPaddingPx,
                         plotBottom = canvasHeightPx - bottomLabelHeightPx,
                         timeFormatter = state.style.timeFormatter,
                         bpmTemplate = bpmTemplate,
