@@ -28,7 +28,7 @@ internal fun DrawScope.renderSleepHrCanvas(
     leftLabelWidthPx: Float,
     zoomedX: (Long) -> Float,
 ) {
-    val plotTop = 0f
+    val plotTop = SLEEP_HR_TOP_LABEL_PADDING.toPx()
     val bottomLabelHeight = SLEEP_HR_BOTTOM_LABEL_HEIGHT.toPx()
     val plotRect = Rect(leftLabelWidthPx, plotTop, size.width, size.height - bottomLabelHeight)
     val plotH = plotRect.bottom - plotRect.top
@@ -123,13 +123,11 @@ private fun DrawScope.drawSleepHrYAxisLabels(
 ) {
     for (bpm in yLabels) {
         val y = bpmToY(bpm)
-        if (y < plotRect.bottom - 4.dp.toPx() && y > plotRect.top + 4.dp.toPx()) {
-            val measured = style.textMeasurer.measure(bpm.toString(), style.labelStyle)
-            drawText(
-                textLayoutResult = measured,
-                topLeft = Offset(plotRect.left - measured.size.width - 4.dp.toPx(), y - measured.size.height / 2f),
-            )
-        }
+        val measured = style.textMeasurer.measure(bpm.toString(), style.labelStyle)
+        drawText(
+            textLayoutResult = measured,
+            topLeft = Offset(plotRect.left - measured.size.width - 4.dp.toPx(), y - measured.size.height / 2f),
+        )
     }
 
     val bpmUnitMeasured = style.textMeasurer.measure(style.bpmUnitLabel, style.axisTitleStyle)
@@ -152,20 +150,26 @@ private fun DrawScope.drawSleepHrXAxisLabels(
     labelTimestamps: List<Long>,
     zoomedX: (Long) -> Float,
 ) {
-    for (ts in labelTimestamps) {
-        val x = zoomedX(ts)
-        if (x in plotRect.left..plotRect.right) {
+    val candidates =
+        labelTimestamps.mapNotNull { ts ->
+            val x = zoomedX(ts)
+            if (x !in plotRect.left..plotRect.right) return@mapNotNull null
             val label = style.timeFormatter.format(Instant.ofEpochMilli(ts))
             val measured = style.textMeasurer.measure(label, style.labelStyle)
-            drawText(
-                textLayoutResult = measured,
-                topLeft =
-                    Offset(
-                        (x - measured.size.width / 2f).coerceIn(plotRect.left, plotRect.right - measured.size.width),
-                        plotRect.bottom + 2.dp.toPx(),
-                    ),
-            )
+            val left = (x - measured.size.width / 2f).coerceIn(plotRect.left, plotRect.right - measured.size.width)
+            left to measured
         }
+
+    val accepted =
+        resolveNonOverlappingLabelsByBounds(
+            lefts = candidates.map { it.first },
+            widthsPx = candidates.map { it.second.size.width },
+            spacingPx = SLEEP_HR_X_LABEL_SPACING.toPx(),
+        )
+
+    for (index in accepted) {
+        val (left, measured) = candidates[index]
+        drawText(textLayoutResult = measured, topLeft = Offset(left, plotRect.bottom + 2.dp.toPx()))
     }
 }
 

@@ -68,25 +68,28 @@ internal fun PointerInputScope.resolveTappedSleepHrSample(
     sortedSamples: List<HeartRateRecordData>,
 ): HeartRateRecordData? {
     val bottomLabelHeightPx = SLEEP_HR_BOTTOM_LABEL_HEIGHT.toPx()
-    val plotRect = Rect(leftLabelWidthPx, 0f, size.width.toFloat(), size.height.toFloat() - bottomLabelHeightPx)
+    val topLabelPaddingPx = SLEEP_HR_TOP_LABEL_PADDING.toPx()
+    val plotRect =
+        Rect(leftLabelWidthPx, topLabelPaddingPx, size.width.toFloat(), size.height.toFloat() - bottomLabelHeightPx)
     return findTappedSleepHrSample(tapOffset, tappedUnscaledX, plotRect, plotW, sessionStartMs, scale, sortedSamples)
 }
 
 internal fun computeSleepHrTooltip(
     selectedSample: HeartRateRecordData?,
-    yMin: Int,
-    yMax: Int,
+    yRange: IntRange,
     zoomedX: (Long) -> Float,
+    plotTop: Float,
     plotBottom: Float,
     timeFormatter: DateTimeFormatter,
     bpmTemplate: String,
 ): DataPointTooltipData? {
     val sample = selectedSample ?: return null
-    val plotTop = 0f
     val plotH = plotBottom - plotTop
 
     val sampleX = zoomedX(sample.timestampMs)
-    val sampleY = plotTop + (1f - (sample.beatsPerMinute - yMin).toFloat() / (yMax - yMin).toFloat()) * plotH
+    val sampleY =
+        plotTop +
+            (1f - (sample.beatsPerMinute - yRange.first).toFloat() / (yRange.last - yRange.first).toFloat()) * plotH
     val timeStr = timeFormatter.format(Instant.ofEpochMilli(sample.timestampMs))
 
     return DataPointTooltipData(
