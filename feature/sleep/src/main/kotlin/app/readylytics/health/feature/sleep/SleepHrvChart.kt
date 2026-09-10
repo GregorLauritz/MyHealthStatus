@@ -22,6 +22,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import app.readylytics.health.core.designsystem.spacing
 import app.readylytics.health.core.model.domain.repository.HrvRecordData
@@ -42,7 +43,7 @@ import app.readylytics.health.core.ui.R as CoreUiR
 // readings routinely exceed HR's 10-minute threshold. 2 hours keeps a normal night's readings on
 // one connected line while still breaking on a genuine multi-hour sensor dropout.
 internal const val SLEEP_HRV_GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000L
-internal const val SLEEP_HRV_Y_TICK_COUNT = 2
+internal const val SLEEP_HRV_Y_TICK_COUNT = 4
 internal val SLEEP_HRV_LEFT_LABEL_WIDTH = 44.dp
 internal val SLEEP_HRV_BOTTOM_LABEL_HEIGHT = 20.dp
 internal val SLEEP_HRV_TOP_LABEL_PADDING = 10.dp
@@ -108,6 +109,61 @@ private fun SleepHrvChartContent(
     SleepHrvChartCanvasArea(state = state, modifier = modifier)
 }
 
+private data class SleepHrvCanvasComputed(
+    val tooltipState: DataPointTooltipData?,
+    val accessibility: SleepHrvAccessibility,
+)
+
+@Composable
+private fun rememberSleepHrvCanvasComputed(
+    state: SleepHrvChartState,
+    scaleX: Float,
+    offsetX: Float,
+    leftLabelWidthPx: Float,
+    plotW: Float,
+    density: Density,
+): SleepHrvCanvasComputed {
+    fun zoomedX(timestampMs: Long): Float =
+        sleepHrZoomedX(timestampMs, state.scale, leftLabelWidthPx, plotW, scaleX, offsetX)
+
+    val msTemplate = stringResource(R.string.sleep_hrv_tooltip_value)
+    val bottomLabelHeightPx = with(density) { SLEEP_HRV_BOTTOM_LABEL_HEIGHT.toPx() }
+    val topLabelPaddingPx = with(density) { SLEEP_HRV_TOP_LABEL_PADDING.toPx() }
+    val canvasHeightPx = with(density) { SLEEP_HRV_CHART_HEIGHT.toPx() }
+
+    val tooltipState =
+        remember(
+            state.interaction.selectedSample.value,
+            scaleX,
+            offsetX,
+            plotW,
+            state.scale,
+            state.data.yMin,
+            state.data.yMax,
+            msTemplate,
+            topLabelPaddingPx,
+        ) {
+            computeSleepHrvTooltip(
+                selectedSample = state.interaction.selectedSample.value,
+                yRange = state.data.yMin..state.data.yMax,
+                zoomedX = ::zoomedX,
+                plotTop = topLabelPaddingPx,
+                plotBottom = canvasHeightPx - bottomLabelHeightPx,
+                timeFormatter = state.style.timeFormatter,
+                msTemplate = msTemplate,
+            )
+        }
+
+    val accessibility =
+        rememberSleepHrvAccessibility(
+            state.data.sortedSamples,
+            state.interaction.selectedSample,
+            state.style.timeFormatter,
+        )
+
+    return SleepHrvCanvasComputed(tooltipState, accessibility)
+}
+
 @Composable
 private fun SleepHrvChartCanvasArea(
     state: SleepHrvChartState,
@@ -122,51 +178,14 @@ private fun SleepHrvChartCanvasArea(
             val leftLabelWidthPx = with(density) { SLEEP_HRV_LEFT_LABEL_WIDTH.toPx() }
             val plotW = with(density) { maxWidth.toPx() } - leftLabelWidthPx
 
-            fun zoomedX(timestampMs: Long): Float =
-                sleepHrZoomedX(timestampMs, state.scale, leftLabelWidthPx, plotW, scaleX, offsetX)
-
-            val msTemplate = stringResource(R.string.sleep_hrv_tooltip_value)
-            val bottomLabelHeightPx = with(density) { SLEEP_HRV_BOTTOM_LABEL_HEIGHT.toPx() }
-            val topLabelPaddingPx = with(density) { SLEEP_HRV_TOP_LABEL_PADDING.toPx() }
-            val canvasHeightPx = with(density) { SLEEP_HRV_CHART_HEIGHT.toPx() }
-
-            val tooltipState =
-                remember(
-                    state.interaction.selectedSample.value,
-                    scaleX,
-                    offsetX,
-                    plotW,
-                    state.scale,
-                    state.data.yMin,
-                    state.data.yMax,
-                    msTemplate,
-                    topLabelPaddingPx,
-                ) {
-                    computeSleepHrvTooltip(
-                        selectedSample = state.interaction.selectedSample.value,
-                        yMin = state.data.yMin,
-                        yMax = state.data.yMax,
-                        zoomedX = ::zoomedX,
-                        plotTop = topLabelPaddingPx,
-                        plotBottom = canvasHeightPx - bottomLabelHeightPx,
-                        timeFormatter = state.style.timeFormatter,
-                        msTemplate = msTemplate,
-                    )
-                }
-
-            val accessibility =
-                rememberSleepHrvAccessibility(
-                    state.data.sortedSamples,
-                    state.interaction.selectedSample,
-                    state.style.timeFormatter,
-                )
+            val computed = rememberSleepHrvCanvasComputed(state, scaleX, offsetX, leftLabelWidthPx, plotW, density)
 
             SleepHrvChartVisuals(
                 state = state,
                 leftLabelWidthPx = leftLabelWidthPx,
                 plotW = plotW,
-                tooltipState = tooltipState,
-                accessibility = accessibility,
+                tooltipState = computed.tooltipState,
+                accessibility = computed.accessibility,
             )
         }
         if (state.avgHrv != null) {

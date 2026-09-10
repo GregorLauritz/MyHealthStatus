@@ -54,7 +54,7 @@ import app.readylytics.health.core.ui.R as CoreUiR
 
 internal const val SLEEP_HR_GAP_THRESHOLD_MS = 10 * 60 * 1000L // 10 minutes
 internal const val SLEEP_HR_TREND_WINDOW_MS = 15 * 60 * 1000L // 15-minute centered rolling average
-internal const val SLEEP_HR_Y_TICK_COUNT = 2
+internal const val SLEEP_HR_Y_TICK_COUNT = 4
 internal val SLEEP_HR_LEFT_LABEL_WIDTH = 44.dp
 internal val SLEEP_HR_BOTTOM_LABEL_HEIGHT = 20.dp
 internal val SLEEP_HR_TOP_LABEL_PADDING = 10.dp
@@ -194,8 +194,7 @@ private fun SleepHrChartCanvasArea(
                 ) {
                     computeSleepHrTooltip(
                         selectedSample = state.interaction.selectedSample.value,
-                        yMin = state.data.yMin,
-                        yMax = state.data.yMax,
+                        yRange = state.data.yMin..state.data.yMax,
                         zoomedX = ::zoomedX,
                         plotTop = topLabelPaddingPx,
                         plotBottom = canvasHeightPx - bottomLabelHeightPx,

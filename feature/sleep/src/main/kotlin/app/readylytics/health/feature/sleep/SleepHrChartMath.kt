@@ -76,8 +76,7 @@ internal fun PointerInputScope.resolveTappedSleepHrSample(
 
 internal fun computeSleepHrTooltip(
     selectedSample: HeartRateRecordData?,
-    yMin: Int,
-    yMax: Int,
+    yRange: IntRange,
     zoomedX: (Long) -> Float,
     plotTop: Float,
     plotBottom: Float,
@@ -88,7 +87,9 @@ internal fun computeSleepHrTooltip(
     val plotH = plotBottom - plotTop
 
     val sampleX = zoomedX(sample.timestampMs)
-    val sampleY = plotTop + (1f - (sample.beatsPerMinute - yMin).toFloat() / (yMax - yMin).toFloat()) * plotH
+    val sampleY =
+        plotTop +
+            (1f - (sample.beatsPerMinute - yRange.first).toFloat() / (yRange.last - yRange.first).toFloat()) * plotH
     val timeStr = timeFormatter.format(Instant.ofEpochMilli(sample.timestampMs))
 
     return DataPointTooltipData(

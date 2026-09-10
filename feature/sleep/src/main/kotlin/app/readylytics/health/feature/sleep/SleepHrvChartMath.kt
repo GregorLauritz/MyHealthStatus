@@ -51,8 +51,7 @@ internal fun PointerInputScope.resolveTappedSleepHrvSample(
 
 internal fun computeSleepHrvTooltip(
     selectedSample: HrvRecordData?,
-    yMin: Int,
-    yMax: Int,
+    yRange: IntRange,
     zoomedX: (Long) -> Float,
     plotTop: Float,
     plotBottom: Float,
@@ -63,7 +62,7 @@ internal fun computeSleepHrvTooltip(
     val plotH = plotBottom - plotTop
 
     val sampleX = zoomedX(sample.timestampMs)
-    val sampleY = plotTop + (1f - (sample.rmssdMs - yMin) / (yMax - yMin).toFloat()) * plotH
+    val sampleY = plotTop + (1f - (sample.rmssdMs - yRange.first) / (yRange.last - yRange.first).toFloat()) * plotH
     val timeStr = timeFormatter.format(Instant.ofEpochMilli(sample.timestampMs))
 
     return DataPointTooltipData(

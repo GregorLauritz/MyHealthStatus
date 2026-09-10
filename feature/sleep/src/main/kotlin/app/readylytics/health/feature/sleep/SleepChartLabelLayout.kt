@@ -15,7 +15,11 @@ internal fun resolveNonOverlappingLabelsByBounds(
 ): List<Int> {
     if (lefts.isEmpty()) return emptyList()
 
-    data class LabelBounds(val index: Int, val left: Float, val right: Float)
+    data class LabelBounds(
+        val index: Int,
+        val left: Float,
+        val right: Float,
+    )
 
     fun overlaps(
         a: LabelBounds,
